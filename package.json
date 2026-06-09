@@ -7,6 +7,7 @@
     "daily-report": "tsx src/cli/dailyReport.ts",
     "test-feishu": "tsx src/cli/testFeishu.ts",
     "probe-page-size": "tsx src/cli/probePageSize.ts",
+    "probe-exposure-page": "tsx src/cli/probeExposurePage.ts",
     "sync-product-id-map": "tsx src/cli/syncProductIdMap.ts",
     "refresh-product-id-map": "tsx src/cli/refreshProductIdMap.ts",
     "rebuild-latest": "tsx src/cli/rebuildLatestReport.ts",
