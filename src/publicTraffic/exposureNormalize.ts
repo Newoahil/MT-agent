@@ -44,7 +44,7 @@ export function normalizeExposureProductRows(headers: string[], rows: string[][]
   const idIndex = findColumn(headers, ['商品ID', '平台商品ID', '平台侧编码']);
   const exposureIndex = findColumn(headers, ['曝光']);
   const visitsIndex = findColumn(headers, ['访问']);
-  const amountIndex = findColumn(headers, ['交易金额', '成交金额', '支付金额', 'GMV', '收入', '金额'], [
+  const amountIndex = findColumn(headers, ['交易金额', '成交金额', '支付金额', 'GMV', '销售额', '收入'], [
     '退款',
     '退货',
     'refund',

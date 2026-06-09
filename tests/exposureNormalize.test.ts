@@ -93,4 +93,13 @@ describe('exposure normalization', () => {
       ),
     ).toThrow('Missing exposure column');
   });
+
+  it('requires explicit positive amount columns', () => {
+    expect(() =>
+      normalizeExposureProductRows(
+        ['商品名称', '商品ID', '曝光', '访问', '退款金额', '优惠金额'],
+        [['DJI Pocket 3', '2026052122000827682227', '5,801', '159', '¥5.00', '¥10.00']],
+      ),
+    ).toThrow('Missing exposure column');
+  });
 });
