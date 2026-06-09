@@ -3,11 +3,15 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../config/loadConfig.js';
 import { crawlExposurePage } from '../crawler/exposureCrawler.js';
 import { sendFeishuText } from '../notify/feishu.js';
+import { analyzePublicTraffic } from '../publicTraffic/analyzePublicTraffic.js';
+import { aggregateExposureDeltas } from '../publicTraffic/exposureAggregate.js';
 import { computeExposureDailyDelta } from '../publicTraffic/exposureDelta.js';
 import { buildPublicTrafficFeishuText } from '../publicTraffic/buildPublicTrafficFeishu.js';
 import { buildPublicTrafficMarkdown } from '../publicTraffic/buildPublicTrafficMarkdown.js';
 import { writePublicTrafficWorkbookBuffer } from '../publicTraffic/buildPublicTrafficWorkbook.js';
 import { buildPublicTrafficPaths } from '../publicTraffic/paths.js';
+import { loadRecentExposureDeltas } from '../publicTraffic/recentExposureDeltas.js';
+import { loadPublicTrafficRulesConfig } from '../publicTraffic/rulesConfig.js';
 import type { ExposureCumulativeProduct, PublicTrafficReportContext } from '../publicTraffic/types.js';
 import { createRunLog } from '../storage/runLog.js';
 
@@ -93,13 +97,35 @@ export async function runPublicTrafficReportCli(): Promise<void> {
     await writeFile(paths.exposureDailyDelta, JSON.stringify(dailyDelta, null, 2), 'utf8');
     log.addEvent(`日差分: ${dailyDelta.length} 条, 新品=${dailyDelta.filter((row) => row.flags.includes('new_product')).length}`);
 
+    const sevenDayDeltas = await loadRecentExposureDeltas(config.outputDir, date, 7);
+    const thirtyDayDeltas = await loadRecentExposureDeltas(config.outputDir, date, 30);
+    const sevenDaySummary = aggregateExposureDeltas(sevenDayDeltas);
+    const thirtyDaySummary = aggregateExposureDeltas(thirtyDayDeltas);
+    await writeFile(paths.exposure7dSummary, JSON.stringify(sevenDaySummary, null, 2), 'utf8');
+    await writeFile(paths.exposure30dSummary, JSON.stringify(thirtyDaySummary, null, 2), 'utf8');
+    log.addEvent(`7日汇总: ${sevenDaySummary.length} 条商品`);
+    log.addEvent(`30日汇总: ${thirtyDaySummary.length} 条商品`);
+
+    const rulesConfig = await loadPublicTrafficRulesConfig();
+    const analysis = analyzePublicTraffic({
+      date,
+      dailyDelta,
+      sevenDaySummary,
+      thirtyDaySummary,
+      cumulativeProducts: crawlResult.products,
+      config: rulesConfig,
+    });
+    log.addEvent(
+      `规则分析: 曝光优化=${analysis.exposureOptimization.length}, 转化优化=${analysis.conversionOptimization.length}, 新品观察=${analysis.newProductObservation.length}, 生命周期治理=${analysis.lifecycleGovernance.length}`,
+    );
+
     const context: PublicTrafficReportContext = {
       date,
       overview: crawlResult.overview,
-      exposureOptimization: [],
-      conversionOptimization: [],
-      newProductObservation: [],
-      lifecycleGovernance: [],
+      exposureOptimization: analysis.exposureOptimization,
+      conversionOptimization: analysis.conversionOptimization,
+      newProductObservation: analysis.newProductObservation,
+      lifecycleGovernance: analysis.lifecycleGovernance,
     };
 
     await writeFile(paths.reportContext, JSON.stringify(context, null, 2), 'utf8');
