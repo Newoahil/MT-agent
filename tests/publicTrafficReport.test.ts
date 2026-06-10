@@ -149,13 +149,19 @@ describe('public traffic report outputs', () => {
     expect(text).not.toContain('6. 端内ID 6');
   });
 
-  it('writes a workbook buffer with expected sheet names', () => {
+  it('writes a workbook buffer with expected sheet names and recommended actions', () => {
     const buffer = writePublicTrafficWorkbookBuffer(context);
     expect(Buffer.isBuffer(buffer)).toBe(true);
     const workbook = XLSX.read(buffer, { type: 'buffer' });
-    expect(workbook.SheetNames).toEqual(['总览', '商品明细', '曝光不足', '点击弱', '转化弱', '高潜力', '新品观察', '生命周期治理']);
+    expect(workbook.SheetNames).toEqual(['总览', '建议操作', '商品明细', '曝光不足', '点击弱', '转化弱', '高潜力', '新品观察', '生命周期治理']);
     const overview = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['总览']);
     expect(overview[0]).toMatchObject({ period: '1d', exposure: 1000 });
+    const recommendedActions = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['建议操作']);
+    expect(recommendedActions[0]).toMatchObject({
+      identifier: '端内ID 900',
+      action: '检查价格/押金/库存/风控/履约链路',
+      reason: '访问有发货弱',
+    });
     const detail = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['商品明细']);
     expect(detail[0]).toMatchObject({
       platformProductId: 'P-1001',
@@ -177,6 +183,25 @@ describe('public traffic report outputs', () => {
       '30d_reviewedOrders': 40,
       '30d_amount': 2888.5,
     });
+  });
+
+  it('writes explanatory notes for empty workbook sections', () => {
+    const empty: PublicTrafficDataReportContext = {
+      ...context,
+      recommendedActions: [],
+      lowExposure: [],
+      weakClick: [],
+      weakConversion: [],
+      highPotential: [],
+      newProductObservation: [],
+      lifecycleGovernance: [],
+    };
+    const workbook = XLSX.read(writePublicTrafficWorkbookBuffer(empty), { type: 'buffer' });
+
+    const recommendedActions = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['建议操作']);
+    expect(recommendedActions[0]).toMatchObject({ note: '暂无需要立即处理的建议操作。' });
+    const lowExposure = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['曝光不足']);
+    expect(lowExposure[0]).toMatchObject({ note: '暂无达到阈值的曝光不足商品。' });
   });
 
   it('keeps legacy workbook sheets for legacy report context', () => {

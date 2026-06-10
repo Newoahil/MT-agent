@@ -10,6 +10,15 @@ function sectionSheet(items: PublicTrafficReportSectionItem[]): XLSX.WorkSheet {
   return XLSX.utils.aoa_to_sheet(aoa);
 }
 
+function sectionRows(items: PublicTrafficReportSectionItem[], emptyNote: string): (string | number)[][] {
+  if (items.length === 0) return [['note'], [emptyNote]];
+
+  return [
+    ['identifier', 'action', 'reason'],
+    ...items.map((item) => [item.identifier, item.action, item.reason]),
+  ];
+}
+
 function detailSheet(rows: PublicTrafficProductDataRow[]): XLSX.WorkSheet {
   const periods: PeriodKey[] = ['1d', '7d', '30d'];
   const aoa: (string | number | null)[][] = [
@@ -85,13 +94,14 @@ export function writePublicTrafficWorkbookBuffer(context: PublicTrafficDataRepor
     overviewAoa.push([period, summary.exposure, summary.publicVisits, summary.dashboardVisits, summary.createdOrders, summary.shippedOrders, summary.amount, summary.exposureVisitRate, summary.visitCreatedOrderRate, summary.visitShipmentRate]);
   }
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(overviewAoa), '总览');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.recommendedActions, context.emptySectionNotes.recommendedActions)), '建议操作');
   XLSX.utils.book_append_sheet(workbook, detailSheet(context.rows), '商品明细');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.lowExposure), '曝光不足');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.weakClick), '点击弱');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.weakConversion), '转化弱');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.highPotential), '高潜力');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.newProductObservation), '新品观察');
-  XLSX.utils.book_append_sheet(workbook, sectionSheet(context.lifecycleGovernance), '生命周期治理');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.lowExposure, context.emptySectionNotes.lowExposure)), '曝光不足');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.weakClick, context.emptySectionNotes.weakClick)), '点击弱');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.weakConversion, context.emptySectionNotes.weakConversion)), '转化弱');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.highPotential, context.emptySectionNotes.highPotential)), '高潜力');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.newProductObservation, context.emptySectionNotes.newProductObservation)), '新品观察');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.lifecycleGovernance, context.emptySectionNotes.lifecycleGovernance)), '生命周期治理');
 
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
