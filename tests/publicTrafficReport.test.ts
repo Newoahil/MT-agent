@@ -197,6 +197,22 @@ describe('public traffic report outputs', () => {
     expect(markdown.trim().endsWith('| C | 新品数据监控 | 新品 |')).toBe(true);
   });
 
+  it('escapes pipe and newline characters in Markdown table cells', () => {
+    const markdown = buildPublicTrafficMarkdown(makeDataReportContext({
+      lowExposure: [{ identifier: 'ID|1\nline2', action: 'act|a', reason: 'r\neason' }],
+      weakClick: [],
+      weakConversion: [],
+      highPotential: [],
+      lifecycleGovernance: [],
+      recommendedActions: [],
+      newProductObservation: [],
+    }));
+
+    expect(markdown).toContain('| 曝光不足 | ID｜1 line2 | act｜a | r eason |');
+    expect(markdown).not.toContain('ID|1');
+    expect(markdown).not.toContain('\nline2');
+  });
+
   it('builds medium-density Feishu text', () => {
     const text = buildPublicTrafficFeishuText(context, { markdownPath: 'report.md', workbookPath: 'report.xlsx' });
     expect(text).toContain('公域数据日报 2026-06-10');

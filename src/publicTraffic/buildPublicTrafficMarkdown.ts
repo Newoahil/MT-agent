@@ -1,3 +1,4 @@
+import { flattenDiagnosticItems, sortedActions } from './diagnosticItems.js';
 import { findOrderAnalysisIndicator, fulfillmentRateLines, shortDataDate } from './orderAnalysis.js';
 import type {
   ExposureOverviewMetric,
@@ -5,18 +6,7 @@ import type {
   PublicTrafficDataSummary,
   PublicTrafficProductDataRow,
   PublicTrafficReportContext,
-  PublicTrafficReportSectionItem,
 } from './types.js';
-
-const emptySectionNotes = {
-  lowExposure: '暂无达到阈值的曝光不足商品。',
-  weakClick: '暂无达到阈值的高曝光低点击商品。',
-  weakConversion: '暂无达到阈值的高访问低转化商品。',
-  highPotential: '暂无达到放量阈值的高潜力商品。',
-  newProductObservation: '暂无可识别的新进入公域商品，或今日缺少上一日快照。',
-  lifecycleGovernance: '暂无达到长期弱表现阈值的托管商品。',
-  recommendedActions: '暂无需要立即处理的建议操作。',
-};
 
 function summaryFromOverview(overview: ExposureOverviewMetric[], period: ExposureOverviewMetric['period']): PublicTrafficDataSummary {
   const metric = overview.find((item) => item.period === period);
@@ -53,7 +43,7 @@ function toDataContext(context: PublicTrafficDataReportContext | PublicTrafficRe
     newProductObservation: context.newProductObservation,
     lifecycleGovernance: context.lifecycleGovernance,
     recommendedActions: [],
-    emptySectionNotes,
+    emptySectionNotes: { lowExposure: '', weakClick: '', weakConversion: '', highPotential: '', newProductObservation: '', lifecycleGovernance: '', recommendedActions: '' },
   };
 }
 
@@ -98,7 +88,7 @@ function appendMarkdownSection(lines: string[], title: string, items: string[]):
 }
 
 function tableCell(value: string): string {
-  return value.replace(/\|/g, '｜').replace(/[\r\n]+/g, ' ');
+  return value.replace(/\|/g, '｜').replace(/[\r\n]+/g, ' ').trim();
 }
 
 function appendMarkdownTable(lines: string[], title: string, headers: string[], rows: string[][]): void {
@@ -108,17 +98,7 @@ function appendMarkdownTable(lines: string[], title: string, headers: string[], 
 }
 
 function diagnosticRows(context: PublicTrafficDataReportContext): string[][] {
-  return [
-    ...context.lowExposure.map((item) => ['曝光不足', item.identifier, item.action, item.reason]),
-    ...context.weakClick.map((item) => ['点击弱', item.identifier, item.action, item.reason]),
-    ...context.weakConversion.map((item) => ['转化弱', item.identifier, item.action, item.reason]),
-    ...context.highPotential.map((item) => ['高潜力', item.identifier, item.action, item.reason]),
-    ...context.lifecycleGovernance.map((item) => ['生命周期治理', item.identifier, item.action, item.reason]),
-  ];
-}
-
-function sortedActions(items: PublicTrafficReportSectionItem[]): PublicTrafficReportSectionItem[] {
-  return [...items].sort((a, b) => a.action.localeCompare(b.action, 'zh-CN') || a.identifier.localeCompare(b.identifier, 'zh-CN'));
+  return flattenDiagnosticItems(context).map(({ type, item }) => [type, item.identifier, item.action, item.reason]);
 }
 
 export function buildPublicTrafficMarkdown(input: PublicTrafficDataReportContext | PublicTrafficReportContext): string {

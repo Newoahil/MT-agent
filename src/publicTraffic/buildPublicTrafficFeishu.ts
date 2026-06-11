@@ -1,3 +1,4 @@
+import { flattenDiagnosticItems, sortedActions } from './diagnosticItems.js';
 import type {
   ExposureOverviewMetric,
   PublicTrafficDataReportContext,
@@ -7,16 +8,6 @@ import type {
   PublicTrafficReportPaths,
   PublicTrafficReportSectionItem,
 } from './types.js';
-
-const emptySectionNotes = {
-  lowExposure: '暂无达到阈值的曝光不足商品。',
-  weakClick: '暂无达到阈值的高曝光低点击商品。',
-  weakConversion: '暂无达到阈值的高访问低转化商品。',
-  highPotential: '暂无达到放量阈值的高潜力商品。',
-  newProductObservation: '暂无可识别的新进入公域商品，或今日缺少上一日快照。',
-  lifecycleGovernance: '暂无达到长期弱表现阈值的托管商品。',
-  recommendedActions: '暂无需要立即处理的建议操作。',
-};
 
 function summaryFromOverview(overview: ExposureOverviewMetric[], period: ExposureOverviewMetric['period']): PublicTrafficDataSummary {
   const metric = overview.find((item) => item.period === period);
@@ -53,7 +44,7 @@ function toDataContext(context: PublicTrafficDataReportContext | PublicTrafficRe
     newProductObservation: context.newProductObservation,
     lifecycleGovernance: context.lifecycleGovernance,
     recommendedActions: [],
-    emptySectionNotes,
+    emptySectionNotes: { lowExposure: '', weakClick: '', weakConversion: '', highPotential: '', newProductObservation: '', lifecycleGovernance: '', recommendedActions: '' },
   };
 }
 
@@ -61,7 +52,7 @@ function percent(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
 }
 
-function itemLines<T extends PublicTrafficReportSectionItem>(items: T[], formatter: (item: T) => string): string[] {
+function itemLines<T>(items: T[], formatter: (item: T) => string): string[] {
   return items.map((item, index) => `${index + 1}. ${formatter(item)}`);
 }
 
@@ -102,20 +93,6 @@ function appendSection(lines: string[], title: string, items: string[]): void {
   lines.push('', title, ...items);
 }
 
-function diagnosticItems(context: PublicTrafficDataReportContext): Array<PublicTrafficReportSectionItem & { type: string }> {
-  return [
-    ...context.lowExposure.map((item) => ({ ...item, type: '曝光不足' })),
-    ...context.weakClick.map((item) => ({ ...item, type: '点击弱' })),
-    ...context.weakConversion.map((item) => ({ ...item, type: '转化弱' })),
-    ...context.highPotential.map((item) => ({ ...item, type: '高潜力' })),
-    ...context.lifecycleGovernance.map((item) => ({ ...item, type: '生命周期治理' })),
-  ];
-}
-
-function sortedActions(items: PublicTrafficReportSectionItem[]): PublicTrafficReportSectionItem[] {
-  return [...items].sort((a, b) => a.action.localeCompare(b.action, 'zh-CN') || a.identifier.localeCompare(b.identifier, 'zh-CN'));
-}
-
 export function buildPublicTrafficFeishuText(input: PublicTrafficDataReportContext | PublicTrafficReportContext, _paths: PublicTrafficReportPaths): string {
   const context = toDataContext(input);
   const one = context.summary['1d'];
@@ -132,7 +109,7 @@ export function buildPublicTrafficFeishuText(input: PublicTrafficDataReportConte
   if (context.dataQualityNotes?.length) lines.push('', '数据提示', ...context.dataQualityNotes);
   if (moduleLine) lines.push('', '模块数量', moduleLine);
   appendSection(lines, '今日曝光 Top10', topExposureLines(context.rows));
-  appendSection(lines, '诊断问题', itemLines(diagnosticItems(context), (item) => `${item.type}｜${item.identifier}｜${item.action}｜${item.reason}`));
+  appendSection(lines, '诊断问题', itemLines(flattenDiagnosticItems(context), (diag) => `${diag.type}｜${diag.item.identifier}｜${diag.item.action}｜${diag.item.reason}`));
   appendSection(lines, '建议操作', itemLines(sortedActions(context.recommendedActions), (item) => `${item.action}｜${item.identifier}｜${item.reason}`));
   appendSection(lines, '新品观察', itemLines(context.newProductObservation, (item) => `${item.identifier}｜${item.action}｜${item.reason}`));
   return lines.join('\n');

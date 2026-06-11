@@ -1,3 +1,4 @@
+import { flattenDiagnosticItems, sortedActions } from './diagnosticItems.js';
 import type { FeishuCardPayload } from '../notify/feishuApp.js';
 import { findOrderAnalysisIndicator, fulfillmentRateLines, shortDataDate } from './orderAnalysis.js';
 import type { PublicTrafficDataReportContext, PublicTrafficProductDataRow, PublicTrafficReportPaths, PublicTrafficReportSectionItem } from './types.js';
@@ -182,14 +183,7 @@ function tableElement(elementId: string, columns: FeishuTableColumn[], rows: Fei
 }
 
 function diagnosticRows(context: PublicTrafficDataReportContext): FeishuTableRow[] {
-  const sections: Array<[string, PublicTrafficReportSectionItem[]]> = [
-    ['曝光不足', context.lowExposure],
-    ['点击弱', context.weakClick],
-    ['转化弱', context.weakConversion],
-    ['高潜力', context.highPotential],
-    ['生命周期治理', context.lifecycleGovernance],
-  ];
-  return sections.flatMap(([type, items]) => items.map((item) => ({ type, product: item.identifier, action: item.action, reason: item.reason })));
+  return flattenDiagnosticItems(context).map(({ type, item }) => ({ type, product: item.identifier, action: item.action, reason: item.reason }));
 }
 
 function sectionTypeKey(item: PublicTrafficReportSectionItem): string {
@@ -197,28 +191,21 @@ function sectionTypeKey(item: PublicTrafficReportSectionItem): string {
 }
 
 function sectionTypeByItem(context: PublicTrafficDataReportContext): Map<string, string> {
-  const sections: Array<[string, PublicTrafficReportSectionItem[]]> = [
-    ['曝光不足', context.lowExposure],
-    ['点击弱', context.weakClick],
-    ['转化弱', context.weakConversion],
-    ['高潜力', context.highPotential],
-    ['新品观察', context.newProductObservation],
-    ['生命周期治理', context.lifecycleGovernance],
-  ];
   const map = new Map<string, string>();
-  for (const [type, items] of sections) {
-    for (const item of items) {
-      const key = sectionTypeKey(item);
-      if (!map.has(key)) map.set(key, type);
-    }
+  for (const { type, item } of flattenDiagnosticItems(context)) {
+    const key = sectionTypeKey(item);
+    if (!map.has(key)) map.set(key, type);
+  }
+  for (const item of context.newProductObservation) {
+    const key = sectionTypeKey(item);
+    if (!map.has(key)) map.set(key, '新品观察');
   }
   return map;
 }
 
 function actionRows(context: PublicTrafficDataReportContext): FeishuTableRow[] {
   const typeByItem = sectionTypeByItem(context);
-  return [...context.recommendedActions]
-    .sort((a, b) => a.action.localeCompare(b.action, 'zh-Hans-CN') || a.identifier.localeCompare(b.identifier, 'zh-Hans-CN'))
+  return sortedActions(context.recommendedActions)
     .map((item) => ({ action: item.action, type: typeByItem.get(sectionTypeKey(item)) ?? '', product: item.identifier, reason: item.reason }));
 }
 
