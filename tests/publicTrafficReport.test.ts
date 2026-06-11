@@ -67,6 +67,20 @@ const context: PublicTrafficDataReportContext = {
   },
 };
 
+const contextWithOrderAnalysis: PublicTrafficDataReportContext = {
+  ...context,
+  orderAnalysis: {
+    capturedAt: '2026-06-12T00:00:00.000Z',
+    runDate: '2026-06-12',
+    pages: {
+      overview: { key: 'overview', label: '标准订单分析', dataDate: '2026-06-10', indicators: [{ label: '签约订单数', value: '103', delta: '较前日+32.1%' }] },
+      delivery: { key: 'delivery', label: '发货分析', dataDate: '2026-06-10', indicators: [{ label: '发货订单数', value: '64', delta: '较前日-4.48%' }] },
+      return: { key: 'return', label: '归还分析', dataDate: null, indicators: [{ label: '归还订单数', value: '15', delta: '较前日-12.8%' }] },
+      customs: { key: 'customs', label: '关单分析', dataDate: '2026-06-10', indicators: [{ label: '关单数', value: '90', delta: '较前日+31.0%' }] },
+    },
+  },
+};
+
 describe('public traffic report outputs', () => {
   it('builds markdown sections', () => {
     const markdown = buildPublicTrafficMarkdown(context);
@@ -270,24 +284,24 @@ describe('public traffic report outputs', () => {
     });
     const detail = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['商品明细']);
     expect(detail[0]).toMatchObject({
-      platformProductId: 'P-1001',
-      displayProductId: '端内ID 1001',
-      '1d_publicVisits': 10,
-      '1d_createdOrders': 2,
-      '1d_signedOrders': 2,
-      '1d_reviewedOrders': 1,
-      '1d_amount': 88.5,
-      '1d_exposureVisitRate': 0.1,
-      '7d_dashboardVisits': 56,
-      '7d_signedOrders': 12,
-      '7d_reviewedOrders': 9,
-      '7d_shippedOrders': 7,
-      '7d_visitShipmentRate': 0.125,
-      '30d_publicVisits': 300,
-      '30d_createdOrders': 60,
-      '30d_signedOrders': 50,
-      '30d_reviewedOrders': 40,
-      '30d_amount': 2888.5,
+      '平台商品ID': 'P-1001',
+      '端内ID': '端内ID 1001',
+      '1日公域访问': 10,
+      '1日创建订单': 2,
+      '1日签约订单': 2,
+      '1日审出订单': 1,
+      '1日金额（元）': 88.5,
+      '1日曝光→访问率': 0.1,
+      '7日后链路访问': 56,
+      '7日签约订单': 12,
+      '7日审出订单': 9,
+      '7日发货订单': 7,
+      '7日访问→发货率': 0.125,
+      '30日公域访问': 300,
+      '30日创建订单': 60,
+      '30日签约订单': 50,
+      '30日审出订单': 40,
+      '30日金额（元）': 2888.5,
     });
   });
 
@@ -323,6 +337,43 @@ describe('public traffic report outputs', () => {
     expect(workbook.SheetNames).toEqual(['总览', '曝光优化', '转化优化', '新品观察', '生命周期治理']);
     const overview = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets['总览']);
     expect(overview[0]).toMatchObject({ period: '1d', exposure: 48103, visits: 1591 });
+  });
+
+  it('商品明细表头为中文且含金额列', () => {
+    const buffer = writePublicTrafficWorkbookBuffer(context);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets['商品明细'];
+    const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 });
+    const headers = rows[0];
+    expect(headers).toContain('平台商品ID');
+    expect(headers).toContain('端内ID');
+    expect(headers).toContain('商品名称');
+    expect(headers).toContain('托管天数');
+    expect(headers).toContain('1日曝光量');
+    expect(headers).toContain('7日金额（元）');
+    expect(headers).toContain('30日访问→发货率');
+    expect(headers).toContain('1日创建订单金额（元）');
+    expect(headers).toContain('7日签约订单金额（元）');
+    expect(headers).toContain('30日发货订单金额（元）');
+    expect(headers.some((h) => /^\d+d_/.test(String(h)))).toBe(false);
+  });
+
+  it('包含订单分析 sheet（context 带 orderAnalysis 时）', () => {
+    const buffer = writePublicTrafficWorkbookBuffer(contextWithOrderAnalysis);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    expect(workbook.SheetNames).toContain('订单分析');
+    const rows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets['订单分析'], { header: 1 });
+    const flat = rows.map((row) => (row ?? []).join('|')).join('\n');
+    expect(flat).toContain('【标准订单分析】数据日期：2026-06-10');
+    expect(flat).toContain('签约订单数|103|较前日+32.1%');
+    expect(flat).toContain('【归还分析】数据日期：未知');
+    expect(flat).toContain('指标|数值|环比');
+  });
+
+  it('context 不带 orderAnalysis 时无订单分析 sheet', () => {
+    const buffer = writePublicTrafficWorkbookBuffer(context);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    expect(workbook.SheetNames).not.toContain('订单分析');
   });
 
   it('renders legacy Markdown and Feishu text with neutral insight defaults', () => {

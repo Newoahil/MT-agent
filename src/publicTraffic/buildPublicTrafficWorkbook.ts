@@ -1,6 +1,9 @@
 import XLSX from 'xlsx-js-style';
 import type { PeriodKey } from '../domain/types.js';
+import { ORDER_ANALYSIS_PAGE_KEYS, type OrderAnalysisResult } from './orderAnalysis.js';
 import type { PublicTrafficDataReportContext, PublicTrafficProductDataRow, PublicTrafficReportContext, PublicTrafficReportSectionItem } from './types.js';
+
+const PERIOD_HEADER_LABELS: Record<PeriodKey, string> = { '1d': '1日', '7d': '7日', '30d': '30日' };
 
 function sectionSheet(items: PublicTrafficReportSectionItem[]): XLSX.WorkSheet {
   const aoa: (string | number)[][] = [['identifier', 'action', 'reason']];
@@ -23,23 +26,30 @@ function detailSheet(rows: PublicTrafficProductDataRow[]): XLSX.WorkSheet {
   const periods: PeriodKey[] = ['1d', '7d', '30d'];
   const aoa: (string | number | null)[][] = [
     [
-      'platformProductId',
-      'displayProductId',
-      'productName',
-      'custodyDays',
-      ...periods.flatMap((period) => [
-        `${period}_exposure`,
-        `${period}_publicVisits`,
-        `${period}_dashboardVisits`,
-        `${period}_createdOrders`,
-        `${period}_signedOrders`,
-        `${period}_reviewedOrders`,
-        `${period}_shippedOrders`,
-        `${period}_amount`,
-        `${period}_exposureVisitRate`,
-        `${period}_visitCreatedOrderRate`,
-        `${period}_visitShipmentRate`,
-      ]),
+      '平台商品ID',
+      '端内ID',
+      '商品名称',
+      '托管天数',
+      ...periods.flatMap((period) => {
+        const p = PERIOD_HEADER_LABELS[period];
+        return [
+          `${p}曝光量`,
+          `${p}公域访问`,
+          `${p}后链路访问`,
+          `${p}创建订单`,
+          `${p}签约订单`,
+          `${p}审出订单`,
+          `${p}发货订单`,
+          `${p}金额（元）`,
+          `${p}创建订单金额（元）`,
+          `${p}签约订单金额（元）`,
+          `${p}审出订单金额（元）`,
+          `${p}发货订单金额（元）`,
+          `${p}曝光→访问率`,
+          `${p}访问→创单率`,
+          `${p}访问→发货率`,
+        ];
+      }),
     ],
   ];
   for (const row of rows) {
@@ -59,12 +69,30 @@ function detailSheet(rows: PublicTrafficProductDataRow[]): XLSX.WorkSheet {
           metric.reviewedOrders,
           metric.shippedOrders,
           metric.amount,
+          metric.createdOrderAmount ?? 0,
+          metric.signedOrderAmount ?? 0,
+          metric.reviewedOrderAmount ?? 0,
+          metric.shippedOrderAmount ?? 0,
           metric.exposureVisitRate,
           metric.visitCreatedOrderRate,
           metric.visitShipmentRate,
         ];
       }),
     ]);
+  }
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function orderAnalysisSheet(result: OrderAnalysisResult): XLSX.WorkSheet {
+  const aoa: string[][] = [];
+  for (const key of ORDER_ANALYSIS_PAGE_KEYS) {
+    const page = result.pages[key];
+    aoa.push([`【${page.label}】数据日期：${page.dataDate ?? '未知'}`]);
+    aoa.push(['指标', '数值', '环比']);
+    for (const item of page.indicators) {
+      aoa.push([item.label, item.value, item.delta]);
+    }
+    aoa.push([]);
   }
   return XLSX.utils.aoa_to_sheet(aoa);
 }
@@ -102,6 +130,9 @@ export function writePublicTrafficWorkbookBuffer(context: PublicTrafficDataRepor
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.highPotential, context.emptySectionNotes.highPotential)), '高潜力');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.newProductObservation, context.emptySectionNotes.newProductObservation)), '新品观察');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sectionRows(context.lifecycleGovernance, context.emptySectionNotes.lifecycleGovernance)), '生命周期治理');
+  if (context.orderAnalysis) {
+    XLSX.utils.book_append_sheet(workbook, orderAnalysisSheet(context.orderAnalysis), '订单分析');
+  }
 
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
