@@ -196,9 +196,12 @@ describe('public traffic report outputs', () => {
     expect(serialized).toContain('端内ID 558');
     expect(serialized).toContain('新品观察 1');
     expect(serialized).toContain('生命周期治理 1');
-    expect(serialized).toContain('高潜力 Top5');
-    expect(serialized).toContain('新品观察 Top5');
-    expect(serialized).toContain('生命周期治理 Top5');
+    expect(serialized).toContain('diag_table');
+    expect(serialized).toContain('action_table');
+    expect(serialized).toContain('new_table');
+    expect(serialized).not.toContain('高潜力 Top5');
+    expect(serialized).not.toContain('新品观察 Top5');
+    expect(serialized).not.toContain('生命周期治理 Top5');
     expect(serialized).not.toContain('report.md');
     expect(serialized).not.toContain('report.xlsx');
   });
@@ -253,19 +256,21 @@ describe('public traffic report outputs', () => {
     expect(cardText).not.toContain('生命周期治理 Top5');
   });
 
-  it('uses column sets to beautify the card summary sections', () => {
+  it('uses compact summary sections in the card', () => {
     const card = buildPublicTrafficCard(context, { markdownPath: 'report.md', workbookPath: 'report.xlsx' });
     const elements = (card.body as { elements: Array<Record<string, unknown>> }).elements;
     const columnSets = elements.filter((element) => element.tag === 'column_set');
+    const markdowns = elements.filter((element) => element.tag === 'markdown') as Array<{ content: string }>;
     const contents = (columnSet: Record<string, unknown>) =>
       (columnSet.columns as Array<{ elements: Array<{ content: string }> }>).flatMap((column) => column.elements.map((element) => element.content));
 
-    expect(columnSets.length).toBeGreaterThanOrEqual(3);
-    expect(contents(columnSets[0])).toContain('**经营结论**');
-    expect(contents(columnSets[1])).toContain('曝光\n**1000**');
-    expect(contents(columnSets[1])).toContain('金额\n**¥300.00**');
-    expect(contents(columnSets[2])).toContain('**模块数量**');
-    expect(contents(columnSets[2])).toContain('曝光不足 1');
+    expect(markdowns[0].content).toContain('**经营结论**');
+    expect(markdowns[0].content).toContain('曝光 1000，较昨日上升 100');
+    expect(columnSets.length).toBeGreaterThanOrEqual(2);
+    expect(contents(columnSets[0])).toContain('曝光\n**1000**');
+    expect(contents(columnSets[0])).toContain('金额\n**¥300.00**');
+    expect(contents(columnSets[1])).toContain('**模块数量**');
+    expect(contents(columnSets[1])).toContain('曝光不足 1');
   });
 
   it('renders explanatory notes for empty sections', () => {
