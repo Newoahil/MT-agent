@@ -82,6 +82,13 @@ function nestedMetricColumn(title: string, metrics: Array<[string, string]>): Re
   };
 }
 
+function orderMetric(page: Parameters<typeof findOrderAnalysisIndicator>[0], label: string, names: string[]): [string, string] {
+  const value = findOrderAnalysisIndicator(page, names);
+  const indicator = page?.indicators.find((item) => names.includes(item.label));
+  const delta = indicator?.delta && indicator.delta !== '较前日-' ? `\n${indicator.delta}` : '';
+  return [label, `${value}${delta}`];
+}
+
 function nestedFunnelColumnSet(groups: Array<{ title: string; metrics: Array<[string, string]> }>, elementId = 'funnel_summary'): Record<string, unknown> {
   return {
     tag: 'column_set',
@@ -123,11 +130,11 @@ function funnelElements(context: PublicTrafficDataReportContext): Record<string,
       { title: `公域（${context.date}）`, metrics: [['曝光', String(one.exposure)], ['公域访问', String(one.publicVisits)], ['后链路访问', String(one.dashboardVisits)]] },
     ], 'funnel_public'),
     nestedFunnelColumnSet([
-      { title: `订单（${shortDataDate(overview?.dataDate)}）`, metrics: [['创建订单', findOrderAnalysisIndicator(overview, ['创建订单数'])], ['签约订单', findOrderAnalysisIndicator(overview, ['签约订单数'])], ['审出订单', findOrderAnalysisIndicator(overview, ['审出订单数'])]] },
-      { title: '订单补充', metrics: [['发货订单', findOrderAnalysisIndicator(overview, ['发货订单数'])], ['签约金额', findOrderAnalysisIndicator(overview, ['签约完成金额（元）', '签约完成金额'])], ['公域金额', `¥${one.amount.toFixed(2)}`]] },
+      { title: `订单（${shortDataDate(overview?.dataDate)}）`, metrics: [orderMetric(overview, '创建订单', ['创建订单数']), orderMetric(overview, '签约订单', ['签约订单数']), orderMetric(overview, '审出订单', ['审出订单数'])] },
+      { title: '订单补充', metrics: [orderMetric(overview, '发货订单', ['发货订单数']), orderMetric(overview, '签约金额', ['签约完成金额（元）', '签约完成金额']), ['公域金额', `¥${one.amount.toFixed(2)}`]] },
     ], 'funnel_order'),
     nestedFunnelColumnSet([
-      { title: `履约（发货${shortDataDate(delivery?.dataDate)}｜归还${shortDataDate(returns?.dataDate)}｜关单${shortDataDate(customs?.dataDate)}）`, metrics: [['待发货', findOrderAnalysisIndicator(delivery, ['待发货订单数'])], ['归还', findOrderAnalysisIndicator(returns, ['归还订单数'])], ['逾期', findOrderAnalysisIndicator(returns, ['逾期订单数'])], ['关单', findOrderAnalysisIndicator(customs, ['关单数'])]] },
+      { title: `履约（发货${shortDataDate(delivery?.dataDate)}｜归还${shortDataDate(returns?.dataDate)}｜关单${shortDataDate(customs?.dataDate)}）`, metrics: [orderMetric(delivery, '待发货', ['待发货订单数']), orderMetric(returns, '归还', ['归还订单数']), orderMetric(returns, '逾期', ['逾期订单数']), orderMetric(customs, '关单', ['关单数'])] },
     ], 'funnel_fulfillment'),
   ];
 }
