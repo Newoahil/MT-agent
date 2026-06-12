@@ -5,6 +5,8 @@ export interface FeishuAppConfig {
   receiveId: string;
 }
 
+type FeishuTokenConfig = Pick<FeishuAppConfig, 'appId' | 'appSecret'>;
+
 export type FeishuAppSendResult = { sent: true; channel: 'app' } | { sent: false; channel: 'app'; reason: string };
 
 export type FeishuCardPayload = Record<string, unknown>;
@@ -15,7 +17,7 @@ export interface FeishuReplyConfig {
   messageId: string;
 }
 
-async function getTenantAccessToken(config: FeishuAppConfig, fetchImpl: typeof fetch): Promise<{ token: string } | { reason: string }> {
+async function getTenantAccessToken(config: FeishuTokenConfig, fetchImpl: typeof fetch): Promise<{ token: string } | { reason: string }> {
   const tokenResponse = await fetchImpl('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

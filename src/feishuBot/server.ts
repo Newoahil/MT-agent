@@ -1,0 +1,67 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { replyFeishuMessageText } from '../notify/feishuApp.js';
+import { parseBotIntent } from './intent.js';
+import { handleBotIntent } from './tools.js';
+import type { FeishuMessageEvent } from './types.js';
+import { handleUrlVerification, verifyFeishuSignature } from './verify.js';
+
+export interface FeishuBotServerConfig {
+  port: number;
+  appId: string;
+  appSecret: string;
+  verificationToken?: string;
+  encryptKey?: string;
+  outputDir?: string;
+}
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function writeJson(res: ServerResponse, status: number, value: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(value));
+}
+
+export function extractTextMessage(payload: FeishuMessageEvent): { messageId: string; text: string } | null {
+  const message = payload.event?.message;
+  if (!message?.message_id || message.message_type !== 'text' || !message.content) return null;
+  const content = JSON.parse(message.content) as { text?: string };
+  return content.text ? { messageId: message.message_id, text: content.text } : null;
+}
+
+export function startFeishuBotServer(config: FeishuBotServerConfig) {
+  const server = createServer(async (req, res) => {
+    if (req.method !== 'POST') return writeJson(res, 404, { error: 'not found' });
+
+    const body = await readBody(req);
+    if (
+      !verifyFeishuSignature({
+        timestamp: req.headers['x-lark-request-timestamp'] as string | undefined,
+        nonce: req.headers['x-lark-request-nonce'] as string | undefined,
+        signature: req.headers['x-lark-signature'] as string | undefined,
+        body,
+        secret: config.encryptKey,
+      })
+    ) {
+      return writeJson(res, 401, { error: 'invalid signature' });
+    }
+
+    const payload = JSON.parse(body) as FeishuMessageEvent & { type?: string; challenge?: string; token?: string };
+    const verification = handleUrlVerification(payload, config.verificationToken);
+    if (verification) return writeJson(res, 200, verification);
+
+    const textMessage = extractTextMessage(payload);
+    if (!textMessage) return writeJson(res, 200, { ok: true });
+
+    writeJson(res, 200, { ok: true });
+
+    const response = await handleBotIntent(parseBotIntent(textMessage.text), config.outputDir);
+    await replyFeishuMessageText({ appId: config.appId, appSecret: config.appSecret, messageId: textMessage.messageId }, response.text);
+  });
+
+  server.listen(config.port);
+  return server;
+}
