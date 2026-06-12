@@ -40,7 +40,15 @@ async function writeContext(): Promise<string> {
     summary: { '1d': summary, '7d': summary, '30d': summary },
     conclusions: [],
     rows: [{ productName: 'iPhone 15', platformProductId: '2000000000000000000001', displayProductId: '端内ID 565', custodyDays: 10, periods: { '1d': metric, '7d': metric, '30d': metric } }],
-    lowExposure: [], weakClick: [], weakConversion: [], highPotential: [], newProductObservation: [], lifecycleGovernance: [], recommendedActions: [], emptySectionNotes: {},
+    lowExposure: [{ identifier: '端内ID 565', action: '补曝光', reason: '曝光不足' }],
+    weakClick: [],
+    weakConversion: [{ identifier: '端内ID 565', action: '提转化', reason: '访问多成交少' }],
+    highPotential: [{ identifier: '端内ID 566', action: '继续放量', reason: '高潜力' }],
+    newProductObservation: [],
+    lifecycleGovernance: [],
+    recommendedActions: [],
+    newProductPoolIds: ['701'],
+    emptySectionNotes: {},
   }));
   return dir;
 }
@@ -62,5 +70,21 @@ describe('handleBotIntent', () => {
     const response = await handleBotIntent({ type: 'query_product', keyword: '565' }, outputDir);
     expect(response.text).toContain('端内ID 565 iPhone 15');
     expect(response.text).toContain('1日：曝光 10');
+  });
+
+  it('answers task pool questions through agent data understanding', async () => {
+    const outputDir = await writeContext();
+    const response = await handleBotIntent({ type: 'unknown', text: '今天要处理哪些' }, outputDir);
+    expect(response.text).toContain('端内ID 566');
+    expect(response.text).toContain('继续放量');
+    expect(response.text).toContain('701');
+  });
+
+  it('answers weak conversion questions through agent data understanding', async () => {
+    const outputDir = await writeContext();
+    const response = await handleBotIntent({ type: 'unknown', text: '转化差的有哪些' }, outputDir);
+    expect(response.text).toContain('端内ID 565');
+    expect(response.text).toContain('提转化');
+    expect(response.text).toContain('访问多成交少');
   });
 });
