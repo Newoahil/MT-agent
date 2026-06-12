@@ -14,5 +14,13 @@ export function buildAgentTaskPool(context: PublicTrafficDataReportContext): Age
   for (const item of getNewProductPool(context)) {
     tasks.push({ productId: item.productId, productName: item.productName, taskType: 'new_product_pool', priority: priorityByType.new_product_pool, reason: item.productName || '新品池待维护', suggestedAction: item.maintenanceStatus, status: '待处理' });
   }
-  return tasks.sort((a, b) => b.priority - a.priority || a.productId.localeCompare(b.productId));
+  const uniqueTasks = new Map<string, AgentTaskItem>();
+  for (const task of tasks) {
+    const key = `${task.productId}\0${task.suggestedAction}\0${task.reason}`;
+    const existing = uniqueTasks.get(key);
+    if (!existing || task.priority > existing.priority) {
+      uniqueTasks.set(key, task);
+    }
+  }
+  return [...uniqueTasks.values()].sort((a, b) => b.priority - a.priority || a.productId.localeCompare(b.productId));
 }
