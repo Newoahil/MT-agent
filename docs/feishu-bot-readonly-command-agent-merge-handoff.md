@@ -31,6 +31,8 @@ It intentionally does not implement:
 - `683f454 功能：新增飞书机器人只读报表工具`
 - `a6414b5 功能：新增飞书消息回复接口`
 - `ec06a1f 功能：新增飞书机器人事件服务`
+- `31c7caf 文档：补充飞书机器人配置与合并说明`
+- `1aaeb59 测试：覆盖飞书机器人 HTTP 回调链路`
 
 ## Main Files Added
 
@@ -119,6 +121,12 @@ npm test -- tests/feishuBotIntent.test.ts tests/feishuBotVerify.test.ts tests/fe
 npm test
 npm run build
 ```
+
+Latest worktree verification:
+
+- `npm test -- tests/feishuBotIntent.test.ts tests/feishuBotVerify.test.ts tests/feishuBotReportStore.test.ts tests/feishuBotTools.test.ts tests/feishuBotReply.test.ts tests/feishuBotServer.test.ts`: 6 files, 20 tests passed.
+- `npm test`: 53 files, 236 tests passed.
+- `npm run build`: passed.
 
 Manual smoke test:
 
