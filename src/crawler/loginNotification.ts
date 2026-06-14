@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { sendFeishuPersonalImage, sendFeishuText, type FeishuEnv } from '../notify/feishu.js';
+import { sendFeishuAppText, type FeishuAppConfig } from '../notify/feishuApp.js';
+import { sendFeishuPersonalImage, type FeishuEnv } from '../notify/feishu.js';
 
 export interface ScreenshotPage {
   screenshot(options?: { fullPage?: boolean; type?: 'png' }): Promise<Buffer | Uint8Array>;
@@ -36,6 +37,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function personalAppConfig(env: FeishuEnv): FeishuAppConfig | null {
+  const receiveId = env.FEISHU_PERSONAL_RECEIVE_ID ?? env.FEISHU_RECEIVE_ID;
+  if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET || !receiveId) {
+    return null;
+  }
+
+  return {
+    appId: env.FEISHU_APP_ID,
+    appSecret: env.FEISHU_APP_SECRET,
+    receiveIdType: env.FEISHU_PERSONAL_RECEIVE_ID_TYPE ?? env.FEISHU_RECEIVE_ID_TYPE ?? 'open_id',
+    receiveId,
+  };
+}
+
 export async function notifyLoginRequired(options: LoginNotificationOptions): Promise<LoginNotificationResult> {
   const { page, stage, outputDir, fetchImpl = fetch, log } = options;
   const env = options.env ?? process.env;
@@ -43,7 +58,6 @@ export async function notifyLoginRequired(options: LoginNotificationOptions): Pr
   if (notifiedStages.has(stage)) {
     return { notified: false, reason: `already notified for stage ${stage}` };
   }
-  notifiedStages.add(stage);
 
   try {
     const image = await page.screenshot({ type: 'png', fullPage: false });
@@ -54,7 +68,18 @@ export async function notifyLoginRequired(options: LoginNotificationOptions): Pr
     await writeFile(join(screenshotDir, fileName), image);
 
     const message = `支付宝登录需要处理：${stage}\n截图文件：${fileName}`;
-    await sendFeishuText({ ...env, FEISHU_SEND_TO: 'personal' }, message, fetchImpl);
+    const textConfig = personalAppConfig(env);
+    if (!textConfig) {
+      const reason = 'missing Feishu personal app config';
+      log?.(`支付宝登录截图通知跳过: ${reason}`);
+      return { notified: false, reason };
+    }
+
+    const textResult = await sendFeishuAppText(textConfig, message, fetchImpl);
+    if (!textResult.sent) {
+      log?.(`支付宝登录截图通知跳过: ${textResult.reason}`);
+      return { notified: false, reason: textResult.reason };
+    }
 
     const imageResult = await sendFeishuPersonalImage(env, image, fetchImpl);
     if (!imageResult.sent) {
@@ -62,6 +87,7 @@ export async function notifyLoginRequired(options: LoginNotificationOptions): Pr
       return { notified: false, reason: imageResult.reason };
     }
 
+    notifiedStages.add(stage);
     return { notified: true, fileName };
   } catch (error) {
     const reason = errorMessage(error);
