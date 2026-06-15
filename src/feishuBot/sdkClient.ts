@@ -1,5 +1,6 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
+import type { LlmToolSelectionProvider } from './llmProvider.js';
 import type { FeishuBotDispatchResult, FeishuBotIncomingTextMessage } from './types.js';
 
 interface SdkMessageData {
@@ -45,6 +46,7 @@ export interface FeishuSdkBotConfig {
   botMentionOpenId?: string;
   botMentionName?: string;
   outputDir?: string;
+  llmToolSelector?: LlmToolSelectionProvider;
   dispatchMessage?: (message: FeishuBotIncomingTextMessage) => Promise<FeishuBotDispatchResult>;
   logError?: (error: unknown, context: { messageId: string; phase: 'reply' | 'dispatch' }) => void;
   sdk?: FeishuSdkModule;
@@ -95,7 +97,7 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
   const client = new sdk.Client({ appId: config.appId, appSecret: config.appSecret });
   const wsClient = new sdk.WSClient({ appId: config.appId, appSecret: config.appSecret });
   const eventDispatcher = new sdk.EventDispatcher({});
-  const dispatchMessage = config.dispatchMessage ?? createFeishuMessageDispatcher({ outputDir: config.outputDir, botMentionOpenId: config.botMentionOpenId, botMentionName: config.botMentionName }).dispatch;
+  const dispatchMessage = config.dispatchMessage ?? createFeishuMessageDispatcher({ outputDir: config.outputDir, botMentionOpenId: config.botMentionOpenId, botMentionName: config.botMentionName, llmToolSelector: config.llmToolSelector }).dispatch;
   const logError = config.logError ?? ((error: unknown, context: { messageId: string; phase: 'reply' | 'dispatch' }) => console.error(`飞书SDK消息处理失败 ${context.phase} ${context.messageId}:`, error));
 
   eventDispatcher.register({

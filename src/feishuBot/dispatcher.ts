@@ -1,5 +1,6 @@
 import { parseBotIntent } from './intent.js';
 import { handleBotIntent } from './tools.js';
+import type { LlmToolSelectionProvider } from './llmProvider.js';
 import type { BotIntent, BotIntentResolver, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage } from './types.js';
 
 export interface FeishuMessageDispatcherConfig {
@@ -8,6 +9,7 @@ export interface FeishuMessageDispatcherConfig {
   botMentionName?: string;
   resolveIntent?: BotIntentResolver;
   handleIntent?: (intent: BotIntent, outputDir?: string) => Promise<BotResponse>;
+  llmToolSelector?: LlmToolSelectionProvider;
   logError?: (error: unknown, message: FeishuBotIncomingTextMessage) => void;
 }
 
@@ -80,7 +82,7 @@ function canonicalizeIntent(intent: BotIntent): BotIntent {
 
 export function createFeishuMessageDispatcher(config: FeishuMessageDispatcherConfig = {}): FeishuMessageDispatcher {
   const resolveIntent = config.resolveIntent ?? ((text: string) => parseBotIntent(text));
-  const handleIntent = config.handleIntent ?? handleBotIntent;
+  const handleIntent = config.handleIntent ?? ((intent, outputDir) => handleBotIntent(intent, outputDir, { llmToolSelector: config.llmToolSelector }));
   const logError = config.logError ?? ((error, message) => console.error(`飞书消息处理失败 ${message.messageId}:`, error));
 
   return {

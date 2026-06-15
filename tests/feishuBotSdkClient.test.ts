@@ -1,6 +1,49 @@
 import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createFeishuSdkBot, extractSdkTextMessage } from '../src/feishuBot/sdkClient.js';
+import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 import type { FeishuBotIncomingTextMessage } from '../src/feishuBot/types.js';
+
+const metric = {
+  exposure: 10,
+  publicVisits: 2,
+  dashboardVisits: 2,
+  createdOrders: 0,
+  signedOrders: 0,
+  reviewedOrders: 0,
+  shippedOrders: 0,
+  amount: 0,
+  exposureVisitRate: 0.2,
+  visitCreatedOrderRate: 0,
+  visitShipmentRate: 0,
+  hasExposureData: true,
+  hasDashboardData: true,
+};
+
+async function writeContext(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'mt-agent-sdk-agent-'));
+  await mkdir(join(dir, '2026-06-11'), { recursive: true });
+  await writeFile(join(dir, '2026-06-11', 'report-context.json'), JSON.stringify({
+    date: '2026-06-11',
+    summary: { '1d': metric, '7d': metric, '30d': metric },
+    conclusions: [],
+    rows: [{ productName: 'iPhone 15', platformProductId: 'p565', displayProductId: '端内ID 565', custodyDays: 10, periods: { '1d': metric, '7d': metric, '30d': metric } }],
+    lowExposure: [],
+    weakClick: [],
+    weakConversion: [],
+    highPotential: [],
+    newProductObservation: [],
+    lifecycleGovernance: [],
+    recommendedActions: [],
+    newProductPoolItems: [],
+    orderAnalysis: { runDate: '2026-06-11', pages: {} },
+    agentData: { removedLinks: [] },
+    emptySectionNotes: {},
+  }));
+  return dir;
+}
 
 describe('extractSdkTextMessage', () => {
   it('extracts text messages from SDK event data', () => {
@@ -145,5 +188,49 @@ describe('createFeishuSdkBot', () => {
     ).resolves.toBeUndefined();
 
     expect(logged).toEqual([{ error: replyError, context: { messageId: 'mid-sdk-reply-fails', phase: 'reply' } }]);
+  });
+
+  it('uses configured LLM selector through the default SDK dispatcher for read-only replies', async () => {
+    const outputDir = await writeContext();
+    const registered: Record<string, (data: unknown) => Promise<void>> = {};
+    const sent: unknown[] = [];
+    const selector: LlmToolSelectionProvider = {
+      async selectTool(request) {
+        expect(request.message).toBe('帮我看看苹果手机');
+        return '{"intent":"product_lookup","tool":"query_product_performance","arguments":{"keyword":"iPhone"},"confidence":0.93,"reason":"product name"}';
+      },
+    };
+
+    class FakeClient {
+      im = { v1: { message: { reply: async (request: unknown) => sent.push(request) } } };
+    }
+
+    class FakeWSClient {
+      start() {
+        return undefined;
+      }
+    }
+
+    class FakeEventDispatcher {
+      register(handlers: Record<string, (data: unknown) => Promise<void>>) {
+        Object.assign(registered, handlers);
+        return this;
+      }
+    }
+
+    const bot = createFeishuSdkBot({
+      appId: 'app',
+      appSecret: 'secret',
+      outputDir,
+      llmToolSelector: selector,
+      sdk: { Client: FakeClient, WSClient: FakeWSClient, EventDispatcher: FakeEventDispatcher },
+    });
+
+    bot.start();
+    await registered['im.message.receive_v1']({
+      message: { message_id: 'mid-sdk-llm-agent', message_type: 'text', content: JSON.stringify({ text: '帮我看看苹果手机' }) },
+    });
+
+    expect(JSON.stringify(sent)).toContain('端内ID 565 iPhone 15');
   });
 });
