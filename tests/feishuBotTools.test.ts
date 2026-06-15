@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { handleBotIntent } from '../src/feishuBot/tools.js';
+import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 
 const summary = {
   exposure: 1000,
@@ -115,5 +116,20 @@ describe('handleBotIntent', () => {
     await expect(handleBotIntent({ type: 'unknown', text: '随便聊聊' }, outputDir)).resolves.toEqual({
       text: '我现在可以查：今日概况、商品、新链接池、待处理任务、转化差、曝光低、高潜力、下架链接、订单情况。你可以问“新链接池怎么样”或“查一下721”。',
     });
+  });
+
+  it('uses an injected LLM selector as the read-only agent fallback for unsupported unknown questions', async () => {
+    const outputDir = await writeContext();
+    const selector: LlmToolSelectionProvider = {
+      async selectTool(request) {
+        expect(request.message).toBe('帮我看看苹果手机');
+        expect(request.tools.map((tool) => tool.name)).toContain('query_product_performance');
+        return '{"intent":"product_lookup","tool":"query_product_performance","arguments":{"keyword":"iPhone"},"confidence":0.92,"reason":"product name lookup"}';
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '帮我看看苹果手机' }, outputDir, { llmToolSelector: selector });
+
+    expect(response.text).toContain('端内ID 565 iPhone 15');
   });
 });
