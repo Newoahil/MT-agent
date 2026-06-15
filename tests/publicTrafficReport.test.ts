@@ -225,6 +225,11 @@ describe('public traffic report outputs', () => {
     expect(text).toContain('3. 转化弱｜端内ID 900｜点击有但转化弱｜访问有发货弱');
     expect(text).toContain('1. 检查价格/押金/库存/风控/履约链路｜端内ID 900｜访问有发货弱');
     expect(text).toContain('曝光 1000｜公域访问 50｜商品页访问 40｜订单 4｜发货 2｜金额 ¥300.00');
+    expect(text).toContain('订单经营');
+    expect(text).toContain('创建订单 194');
+    expect(text).toContain('签约订单 103');
+    expect(text).toContain('发货订单 64');
+    expect(text).toContain('关单 90');
     expect(text).toContain('发货率');
     expect(text).toContain('关单率');
     expect(text).toContain('客单价');

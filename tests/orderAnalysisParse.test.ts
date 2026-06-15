@@ -147,6 +147,6 @@ describe('derived order business metrics', () => {
       ],
     };
 
-    expect(businessMetricLines(noCreated, undefined)).toEqual(['发货率 -｜关单率 -（目标<=35%，-）｜客单价 -']);
+    expect(businessMetricLines(noCreated, undefined)).toEqual(['发货率 -｜关单率 -（目标<=35%）｜客单价 -']);
   });
 });

@@ -1,5 +1,5 @@
 import { flattenDiagnosticItems, sortedActions } from './diagnosticItems.js';
-import { businessMetricLines } from './orderAnalysis.js';
+import { businessMetricLines, findOrderAnalysisIndicator } from './orderAnalysis.js';
 import type {
   ExposureOverviewMetric,
   PublicTrafficDataReportContext,
@@ -80,11 +80,22 @@ function topExposureLines(rows: PublicTrafficProductDataRow[]): string[] {
   return items.map(productLine);
 }
 
+function orderBusinessLine(context: PublicTrafficDataReportContext): string[] {
+  const orderAnalysis = context.orderAnalysis;
+  if (!orderAnalysis) return [];
+  const overview = orderAnalysis.pages.overview;
+  const customs = orderAnalysis.pages.customs;
+  return [
+    `订单经营：创建订单 ${findOrderAnalysisIndicator(overview, ['创建订单数'])}｜签约订单 ${findOrderAnalysisIndicator(overview, ['签约订单数'])}｜发货订单 ${findOrderAnalysisIndicator(overview, ['发货订单数'])}｜关单 ${findOrderAnalysisIndicator(customs, ['关单数'])}`,
+  ];
+}
+
 function funnelLines(context: PublicTrafficDataReportContext): string[] {
   const summary = context.summary['1d'];
   const business = businessMetricLines(context.orderAnalysis?.pages.overview, context.orderAnalysis?.pages.customs);
   return [
     `曝光 ${summary.exposure}｜公域访问 ${summary.publicVisits}｜商品页访问 ${summary.dashboardVisits}｜订单 ${summary.createdOrders}｜发货 ${summary.shippedOrders}｜金额 ¥${summary.amount.toFixed(2)}`,
+    ...orderBusinessLine(context),
     ...(business.length ? business : [`曝光到访问率 ${percent(summary.exposureVisitRate)}｜访问到发货率 ${percent(summary.visitShipmentRate)}`]),
   ];
 }
