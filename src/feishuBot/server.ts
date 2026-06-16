@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { replyFeishuMessageCard, replyFeishuMessageText, type FeishuAppSendResult, type FeishuCardPayload, type FeishuReplyConfig } from '../notify/feishuApp.js';
 import { findLatestReportContext } from './reportStore.js';
+import { buildIdLookupCard } from './idLookupCard.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
+import { buildOperationsLearningQuestionCard, selectOperationsLearningQuizItems } from '../operationsLearningLoop/quiz.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
 import type { BotIntent, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage, FeishuMessageEvent } from './types.js';
 import { handleUrlVerification } from './verify.js';
@@ -27,10 +29,12 @@ interface FeishuCardActionEvent {
     open_message_id?: unknown;
     context?: { open_message_id?: unknown };
     action?: {
+      name?: unknown;
       input_value?: unknown;
       value?: unknown;
       form_value?: unknown;
       formValue?: unknown;
+      behaviors?: unknown;
     };
   };
 }
@@ -72,8 +76,25 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 function cardActionValue(payload: FeishuCardActionEvent): Record<string, unknown> | undefined {
-  return isRecord(payload.event?.action?.value) ? payload.event.action.value : undefined;
+  const action = payload.event?.action;
+  if (isRecord(action?.value)) return action.value;
+  if (Array.isArray(action?.behaviors)) {
+    for (const behavior of action.behaviors) {
+      if (isRecord(behavior) && isRecord(behavior.value)) return behavior.value;
+    }
+  }
+  if (readString(action?.name) === 'id_lookup_submit') return { action: 'id_lookup' };
+  return undefined;
 }
 
 function readActionFormValue(action: FeishuCardAction | undefined, name: string): string | undefined {
@@ -106,29 +127,36 @@ function formatOperationsLearningFeedback(value: Record<string, unknown>, sugges
   return `已收到运营学习反馈：${productId} ${feedback}${suggestion ? `。建议：${suggestion}` : ''}`;
 }
 
-async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: FeishuBotServerConfig): Promise<void> {
+async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: FeishuBotServerConfig): Promise<FeishuCardPayload | undefined> {
   const messageId = extractCardMessageId(payload);
   const value = cardActionValue(payload);
   const actionName = readString(value?.action);
-  if (!messageId || !actionName) return;
+  if (!messageId || !actionName) return undefined;
 
   const replyText = config.replyText ?? replyFeishuMessageText;
   const replyConfig = { appId: config.appId, appSecret: config.appSecret, messageId };
 
   if (actionName === 'operations_learning_feedback') {
+    const latest = await findLatestReportContext(config.outputDir);
+    const currentIndex = readNumber(value?.questionIndex);
+    const items = latest ? selectOperationsLearningQuizItems(latest.context) : [];
+    const nextItem = currentIndex ? items[currentIndex] : undefined;
+    if (latest && nextItem && currentIndex) {
+      return buildOperationsLearningQuestionCard(latest.context.date, nextItem, { index: currentIndex + 1, total: items.length });
+    }
     await replyText(replyConfig, formatOperationsLearningFeedback(value ?? {}, readActionFormValue(payload.event?.action, 'suggested_action')));
-    return;
+    return undefined;
   }
 
   if (actionName === 'id_lookup') {
     const query = readActionFormValue(payload.event?.action, 'lookup_query') ?? readString(value?.query);
     if (!query) {
-      await replyText(replyConfig, '请输入端内ID或平台商品ID后再查询。');
-      return;
+      return buildIdLookupCard({ resultText: '请输入端内ID或平台商品ID后再查询。' });
     }
     const latest = await findLatestReportContext(config.outputDir);
-    await replyText(replyConfig, latest ? formatIdLookupResult(lookupProductId(latest.context, query)) : '还没有找到公域日报上下文。');
+    return buildIdLookupCard({ defaultValue: query, resultText: latest ? formatIdLookupResult(lookupProductId(latest.context, query)) : '还没有找到公域日报上下文。' });
   }
+  return undefined;
 }
 
 export function startFeishuBotServer(config: FeishuBotServerConfig) {
@@ -145,8 +173,8 @@ export function startFeishuBotServer(config: FeishuBotServerConfig) {
     if (verification) return writeJson(res, 200, verification);
 
     if (isCardActionTrigger(payload)) {
-      writeJson(res, 200, { ok: true });
-      await handleCardActionTrigger(payload, config);
+      const card = await handleCardActionTrigger(payload, config);
+      writeJson(res, 200, card ?? { ok: true });
       return;
     }
 

@@ -136,12 +136,8 @@ describe('startFeishuBotServer', () => {
     }
   });
 
-  it('routes HTTP card action id lookup callbacks', async () => {
+  it('returns an updated card for HTTP card action id lookup callbacks', async () => {
     const replies: Array<{ messageId: string; text: string }> = [];
-    let resolveReplySent!: () => void;
-    const replySent = new Promise<void>((resolve) => {
-      resolveReplySent = resolve;
-    });
     const server = startFeishuBotServer({
       port: 0,
       appId: 'app',
@@ -149,7 +145,6 @@ describe('startFeishuBotServer', () => {
       outputDir: await mkdtemp(join(tmpdir(), 'mt-agent-bot-http-empty-')),
       replyText: async ({ messageId }, text) => {
         replies.push({ messageId, text });
-        resolveReplySent();
         return { sent: true, channel: 'app' };
       },
     });
@@ -171,8 +166,10 @@ describe('startFeishuBotServer', () => {
       });
 
       expect(response.status).toBe(200);
-      await replySent;
-      expect(replies).toEqual([{ messageId: 'mid-http-id-card', text: '还没有找到公域日报上下文。' }]);
+      const card = await response.json();
+      expect(JSON.stringify(card)).toContain('查询结果');
+      expect(JSON.stringify(card)).toContain('还没有找到公域日报上下文。');
+      expect(replies).toEqual([]);
     } finally {
       server.close();
     }
@@ -214,6 +211,47 @@ describe('startFeishuBotServer', () => {
       expect(response.status).toBe(200);
       await replySent;
       expect(replies).toEqual([{ messageId: 'mid-http-loop-card', text: '已收到运营学习反馈：565 good。建议：继续放量' }]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('routes HTTP card action callbacks when Feishu returns callback value through behaviors', async () => {
+    const replies: Array<{ messageId: string; text: string }> = [];
+    let resolveReplySent!: () => void;
+    const replySent = new Promise<void>((resolve) => {
+      resolveReplySent = resolve;
+    });
+    const server = startFeishuBotServer({
+      port: 0,
+      appId: 'app',
+      appSecret: 'secret',
+      replyText: async ({ messageId }, text) => {
+        replies.push({ messageId, text });
+        resolveReplySent();
+        return { sent: true, channel: 'app' };
+      },
+    });
+    try {
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP server address');
+
+      const response = await fetch(`http://127.0.0.1:${address.port}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          header: { event_type: 'card.action.trigger' },
+          event: {
+            context: { open_message_id: 'mid-http-loop-behavior' },
+            action: { behaviors: [{ type: 'callback', value: { action: 'operations_learning_feedback', productId: '565', feedback: 'reasonable' } }] },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      await replySent;
+      expect(replies).toEqual([{ messageId: 'mid-http-loop-behavior', text: '已收到运营学习反馈：565 reasonable' }]);
     } finally {
       server.close();
     }

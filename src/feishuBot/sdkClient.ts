@@ -1,7 +1,9 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { findLatestReportContext } from './reportStore.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
+import { buildIdLookupCard } from './idLookupCard.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
+import { buildOperationsLearningQuestionCard, selectOperationsLearningQuizItems } from '../operationsLearningLoop/quiz.js';
 import type { LlmToolSelectionProvider } from './llmProvider.js';
 import type { FeishuCardPayload } from '../notify/feishuApp.js';
 import type { FeishuBotDispatchResult, FeishuBotIncomingTextMessage } from './types.js';
@@ -27,9 +29,13 @@ interface SdkCardAction {
   value?: unknown;
   form_value?: unknown;
   formValue?: unknown;
+  behaviors?: unknown;
 }
 
 interface SdkCardActionData {
+  open_message_id?: unknown;
+  context?: { open_message_id?: unknown };
+  action?: SdkCardAction;
   event?: {
     open_message_id?: unknown;
     context?: { open_message_id?: unknown };
@@ -42,12 +48,17 @@ interface FeishuSdkReplyRequest {
   data: { content: string; msg_type: 'text' | 'interactive' };
 }
 
+interface FeishuSdkPatchRequest {
+  path: { message_id: string };
+  data: { content: string };
+}
+
 interface FeishuSdkClient {
-  im: { v1: { message: { reply(request: FeishuSdkReplyRequest): Promise<unknown> | unknown } } };
+  im: { v1: { message: { reply(request: FeishuSdkReplyRequest): Promise<unknown> | unknown; patch?: (request: FeishuSdkPatchRequest) => Promise<unknown> | unknown } } };
 }
 
 interface FeishuSdkEventDispatcher {
-  register(handlers: Record<string, (data: unknown) => Promise<void>>): FeishuSdkEventDispatcher;
+  register(handlers: Record<string, (data: unknown) => Promise<unknown>>): FeishuSdkEventDispatcher;
 }
 
 interface FeishuSdkWsClient {
@@ -92,6 +103,15 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 function readActionFormValue(action: SdkCardAction | undefined, name: string): string | undefined {
   if (!isRecord(action)) return undefined;
   for (const key of ['form_value', 'formValue']) {
@@ -106,12 +126,24 @@ function readActionFormValue(action: SdkCardAction | undefined, name: string): s
 
 function extractCardMessageId(data: unknown): string | undefined {
   if (!isSdkCardActionData(data)) return undefined;
-  return readString(data.event?.context?.open_message_id) ?? readString(data.event?.open_message_id);
+  return readString(data.event?.context?.open_message_id) ?? readString(data.event?.open_message_id) ?? readString(data.context?.open_message_id) ?? readString(data.open_message_id);
+}
+
+function extractCardAction(data: unknown): SdkCardAction | undefined {
+  if (!isSdkCardActionData(data)) return undefined;
+  return data.event?.action ?? data.action;
 }
 
 function cardActionValue(data: unknown): Record<string, unknown> | undefined {
-  if (!isSdkCardActionData(data)) return undefined;
-  return isRecord(data.event?.action?.value) ? data.event.action.value : undefined;
+  const action = extractCardAction(data);
+  if (isRecord(action?.value)) return action.value;
+  if (Array.isArray(action?.behaviors)) {
+    for (const behavior of action.behaviors) {
+      if (isRecord(behavior) && isRecord(behavior.value)) return behavior.value;
+    }
+  }
+  if (readString(action?.name) === 'id_lookup_submit') return { action: 'id_lookup' };
+  return undefined;
 }
 
 function formatOperationsLearningFeedback(value: Record<string, unknown>, suggestion: string | undefined): string {
@@ -132,6 +164,16 @@ async function replyCard(client: FeishuSdkClient, messageId: string, card: Feish
     path: { message_id: messageId },
     data: { content: JSON.stringify(card), msg_type: 'interactive' },
   });
+}
+
+async function updateCard(client: FeishuSdkClient, messageId: string, card: FeishuCardPayload): Promise<boolean> {
+  const patch = client.im.v1.message.patch;
+  if (!patch) return false;
+  await patch({
+    path: { message_id: messageId },
+    data: { content: JSON.stringify(card) },
+  });
+  return true;
 }
 
 export function extractSdkTextMessage(data: unknown): FeishuBotIncomingTextMessage | null {
@@ -184,25 +226,36 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
     },
     'card.action.trigger': async (data: unknown) => {
       const messageId = extractCardMessageId(data);
-      const action = isSdkCardActionData(data) ? data.event?.action : undefined;
+      const action = extractCardAction(data);
       const value = cardActionValue(data);
       const actionName = readString(value?.action);
       if (!messageId || !actionName) return;
 
       try {
         if (actionName === 'operations_learning_feedback') {
-          await replyText(client, messageId, formatOperationsLearningFeedback(value ?? {}, readActionFormValue(action, 'suggested_action')));
+          const latest = await findLatestReportContext(config.outputDir);
+          const currentIndex = readNumber(value?.questionIndex);
+          const items = latest ? selectOperationsLearningQuizItems(latest.context) : [];
+          const nextItem = currentIndex ? items[currentIndex] : undefined;
+          if (latest && nextItem && currentIndex) {
+            await replyCard(client, messageId, buildOperationsLearningQuestionCard(latest.context.date, nextItem, { index: currentIndex + 1, total: items.length }));
+            return;
+          }
+          await replyText(client, messageId, `${formatOperationsLearningFeedback(value ?? {}, readActionFormValue(action, 'suggested_action'))}${latest && currentIndex && currentIndex >= items.length ? '。本轮测验已完成。' : ''}`);
           return;
         }
 
         if (actionName === 'id_lookup') {
           const query = readActionFormValue(action, 'lookup_query') ?? readString(value?.query);
+          let card: FeishuCardPayload;
           if (!query) {
-            await replyText(client, messageId, '请输入端内ID或平台商品ID后再查询。');
-            return;
+            card = buildIdLookupCard({ resultText: '请输入端内ID或平台商品ID后再查询。' });
+          } else {
+            const latest = await findLatestReportContext(config.outputDir);
+            card = buildIdLookupCard({ defaultValue: query, resultText: latest ? formatIdLookupResult(lookupProductId(latest.context, query)) : '还没有找到公域日报上下文。' });
           }
-          const latest = await findLatestReportContext(config.outputDir);
-          await replyText(client, messageId, latest ? formatIdLookupResult(lookupProductId(latest.context, query)) : '还没有找到公域日报上下文。');
+          await replyCard(client, messageId, card);
+          return;
         }
       } catch (error) {
         logError(error, { messageId, phase: 'reply' });
