@@ -113,6 +113,7 @@ describe('operations learning loop quiz preview', () => {
     expect(serialized).toContain('feedback":"reasonable');
     expect(serialized).toContain('feedback":"unreasonable');
     expect(serialized).toContain('feedback":"not_representative');
+    expect(serialized).toContain('"behaviors":[{"type":"callback","value":{"action":"operations_learning_feedback"');
     expect(serialized).toContain(item.productId);
   });
 

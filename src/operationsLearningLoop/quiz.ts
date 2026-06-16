@@ -149,11 +149,13 @@ export function buildOperationsLearningQuizCard(date: string, items: OperationsL
 }
 
 function feedbackButton(label: string, feedback: OperationsLearningFeedbackOption, date: string, item: OperationsLearningQuizItem, index: number): Record<string, unknown> {
+  const value = { action: 'operations_learning_feedback', date, productId: item.productId, feedback, questionIndex: index };
   return {
     tag: 'button',
     text: { tag: 'plain_text', content: label },
     type: feedback === 'reasonable' ? 'primary' : 'default',
-    value: { action: 'operations_learning_feedback', date, productId: item.productId, feedback, questionIndex: index },
+    value,
+    behaviors: [{ type: 'callback', value }],
   };
 }
 
