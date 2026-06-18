@@ -14,10 +14,23 @@ import { waitForSettledLoginState } from './loginState.js';
 export interface ExposureCrawlResult {
   overview: ExposureOverviewMetric[];
   products: ExposureCumulativeProduct[];
+  paginationStats: ExposurePaginationStats;
   url: string;
 }
 
+export interface ExposurePaginationStats {
+  pageRowCounts: number[];
+  uniquePageSignatures: string[];
+  duplicatePageSignatures: number;
+  maxRepeatedSignatureAttempts: number;
+  duplicateProductRows: number;
+  skippedProductIdRows: number;
+}
+
 const EXPOSURE_URL = 'https://b.alipay.com/page/self-operation-center/custody?custodyChannel=public';
+const MIN_RELIABLE_EXPOSURE_PRODUCTS = 200;
+const MIN_RELIABLE_EXPOSURE_WINDOWS = 20;
+const MAX_EXPOSURE_COLLECTION_ATTEMPTS = 3;
 const PERIOD_LABELS: Array<{ label: string; period: ExposureOverviewMetric['period'] }> = [
   { label: '1日', period: '1d' },
 ];
@@ -112,6 +125,7 @@ async function extractAllOverviews(page: Page): Promise<ExposureOverviewMetric[]
 async function getCurrentTable(page: Page): Promise<{
   headers: string[];
   rows: Array<{ cells: string[]; productTitle: string; domProductId: string }>;
+  signature: string;
 }> {
   return page.evaluate(`(() => {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -128,7 +142,7 @@ async function getCurrentTable(page: Page): Promise<{
         && headers.some((header) => header.includes('商品访问次数'))
         && headers.some((header) => header.includes('交易金额'));
     });
-    if (!table) return { headers: [], rows: [] };
+    if (!table) return { headers: [], rows: [], signature: '' };
     const headers = Array.from(table.querySelectorAll('thead th')).map((cell) => clean(cell.textContent));
     const infoIndex = headers.findIndex((header) => header.includes('商品信息'));
     const titleFromInfoCell = (cell) => {
@@ -155,8 +169,24 @@ async function getCurrentTable(page: Page): Promise<{
       };
     });
 
-    return { headers, rows };
+    const signature = rows.map((row) => row.cells.join('|')).join('||');
+    return { headers, rows, signature };
   })()`);
+}
+
+async function waitForTableSignatureChange(page: Page, previousSignature: string): Promise<void> {
+  if (await tryWaitForTableSignatureChange(page, previousSignature, 15000)) return;
+  throw new Error('曝光翻页后表格未变化');
+}
+
+async function tryWaitForTableSignatureChange(page: Page, previousSignature: string, timeoutMs: number): Promise<boolean> {
+  const effectiveDeadline = Date.now() + timeoutMs;
+  while (Date.now() < effectiveDeadline) {
+    await page.waitForTimeout(500);
+    const current = await getCurrentTable(page);
+    if (current.signature && current.signature !== previousSignature) return true;
+  }
+  return false;
 }
 
 async function clickCurrentTableNext(page: Page): Promise<boolean> {
@@ -183,6 +213,108 @@ async function clickCurrentTableNext(page: Page): Promise<boolean> {
   })()`);
 }
 
+async function scrollCurrentTableForward(page: Page): Promise<boolean> {
+  return page.evaluate(`(() => {
+    const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const table = Array.from(document.querySelectorAll('table')).find((candidate) => {
+      if (!isVisible(candidate)) return false;
+      const headers = Array.from(candidate.querySelectorAll('thead th')).map((cell) => clean(cell.textContent));
+      return headers.some((header) => header.includes('商品信息'))
+        && headers.some((header) => header.includes('曝光次数'))
+        && headers.some((header) => header.includes('商品访问次数'))
+        && headers.some((header) => header.includes('交易金额'));
+    });
+    const wrapper = table?.closest('.ant-table-wrapper');
+    const candidates = [
+      ...(wrapper ? Array.from(wrapper.querySelectorAll('.ant-table-body, .ant-table-content, [class*="virtual"], [class*="scroll"]')) : []),
+      ...(wrapper ? Array.from(wrapper.querySelectorAll('*')) : []),
+      document.scrollingElement,
+    ].filter((element) => element instanceof Element && isVisible(element));
+    const scrollableElements = candidates.filter((element) => element.scrollHeight > element.clientHeight + 4);
+    let advanced = false;
+    for (const element of scrollableElements) {
+      const before = element.scrollTop;
+      element.scrollTop = before + Math.max(element.clientHeight || 600, 600);
+      advanced = element.scrollTop > before || advanced;
+    }
+    return advanced;
+  })()`);
+}
+
+async function wheelCurrentTableForward(page: Page): Promise<boolean> {
+  const target = await page.evaluate<{ x: number; y: number } | null>(`(() => {
+    const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const table = Array.from(document.querySelectorAll('table')).find((candidate) => {
+      if (!isVisible(candidate)) return false;
+      const headers = Array.from(candidate.querySelectorAll('thead th')).map((cell) => clean(cell.textContent));
+      return headers.some((header) => header.includes('商品信息'))
+        && headers.some((header) => header.includes('曝光次数'))
+        && headers.some((header) => header.includes('商品访问次数'))
+        && headers.some((header) => header.includes('交易金额'));
+    });
+    const scrollTarget = table?.closest('.ant-table-wrapper')?.querySelector('.ant-table-body, .ant-table-content') ?? table;
+    const rect = scrollTarget?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    return { x: rect.left + rect.width / 2, y: rect.top + Math.min(rect.height - 5, Math.max(5, rect.height / 2)) };
+  })()`);
+  if (!target) return false;
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.wheel(0, 900);
+  return true;
+}
+
+async function keyboardCurrentTableForward(page: Page): Promise<boolean> {
+  const focused = await page.evaluate(`(() => {
+    const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const table = Array.from(document.querySelectorAll('table')).find((candidate) => {
+      if (!isVisible(candidate)) return false;
+      const headers = Array.from(candidate.querySelectorAll('thead th')).map((cell) => clean(cell.textContent));
+      return headers.some((header) => header.includes('商品信息'))
+        && headers.some((header) => header.includes('曝光次数'))
+        && headers.some((header) => header.includes('商品访问次数'))
+        && headers.some((header) => header.includes('交易金额'));
+    });
+    const target = table?.closest('.ant-table-wrapper') ?? table;
+    if (!(target instanceof HTMLElement)) return false;
+    target.tabIndex = target.tabIndex >= 0 ? target.tabIndex : -1;
+    target.focus();
+    return true;
+  })()`);
+  if (!focused) return false;
+  await page.keyboard.press('PageDown');
+  return true;
+}
+
+async function advanceCurrentTable(page: Page, previousSignature: string): Promise<boolean> {
+  const attempts: Array<() => Promise<boolean>> = [
+    () => clickCurrentTableNext(page),
+    () => scrollCurrentTableForward(page),
+    () => wheelCurrentTableForward(page),
+    () => keyboardCurrentTableForward(page),
+  ];
+
+  for (const attempt of attempts) {
+    if (!(await attempt())) continue;
+    if (await tryWaitForTableSignatureChange(page, previousSignature, 4000)) return true;
+  }
+  return false;
+}
+
 async function loadExposureFallbackMapping(config: AgentConfig): Promise<ProductIdMapping> {
   const mappingPath = config.productIdMappingPath ?? 'config/product-id-map.json';
   try {
@@ -196,14 +328,35 @@ async function loadExposureFallbackMapping(config: AgentConfig): Promise<Product
   }
 }
 
-async function extractProductRows(page: Page, mapping: ProductIdMapping): Promise<ExposureCumulativeProduct[]> {
-  const products: ExposureCumulativeProduct[] = [];
+async function extractProductRows(page: Page, mapping: ProductIdMapping): Promise<{ products: ExposureCumulativeProduct[]; paginationStats: ExposurePaginationStats }> {
+  const productsById = new Map<string, ExposureCumulativeProduct>();
+  const pageRowCounts: number[] = [];
+  const uniquePageSignatures: string[] = [];
+  const seenPageSignatures = new Set<string>();
   let pageNum = 0;
   let skippedProductIdRows = 0;
+  let duplicateProductRows = 0;
+  let duplicatePageSignatures = 0;
+  let repeatedSignatureAttempts = 0;
+  let maxRepeatedSignatureAttempts = 0;
 
   while (true) {
     pageNum += 1;
-    const { headers, rows } = await getCurrentTable(page);
+    const { headers, rows, signature } = await getCurrentTable(page);
+    if (seenPageSignatures.has(signature)) {
+      duplicatePageSignatures += 1;
+      repeatedSignatureAttempts += 1;
+      maxRepeatedSignatureAttempts = Math.max(maxRepeatedSignatureAttempts, repeatedSignatureAttempts);
+      pageNum -= 1;
+      if (repeatedSignatureAttempts >= 20 || !(await advanceCurrentTable(page, signature))) {
+        break;
+      }
+      continue;
+    }
+    repeatedSignatureAttempts = 0;
+    seenPageSignatures.add(signature);
+    uniquePageSignatures.push(signature);
+    pageRowCounts.push(rows.length);
     const infoIndex = findHeaderIndex(headers, '商品信息');
     const exposureIndex = findHeaderIndex(headers, '曝光次数');
     const visitsIndex = findHeaderIndex(headers, '商品访问次数');
@@ -217,7 +370,7 @@ async function extractProductRows(page: Page, mapping: ProductIdMapping): Promis
     for (const { cells, productTitle, domProductId } of rows) {
       const infoText = normalizeText(cells[infoIndex]);
       const regexProductId = extractProductIdFromInfo(infoText);
-      const platformProductId = domProductId || resolveFallbackProductId(regexProductId, mapping);
+      const platformProductId = domProductId || resolveFallbackProductId(regexProductId, mapping) || regexProductId;
       if (!platformProductId) {
         skippedProductIdRows += 1;
         continue;
@@ -228,7 +381,12 @@ async function extractProductRows(page: Page, mapping: ProductIdMapping): Promis
         raw[normalizeText(header) || String(index)] = normalizeText(cells[index]);
       });
 
-      products.push({
+      if (productsById.has(platformProductId)) {
+        duplicateProductRows += 1;
+        continue;
+      }
+
+      productsById.set(platformProductId, {
         productName: resolveProductNameFromInfo(productTitle, infoText, platformProductId),
         platformProductId,
         exposure: parseNumberText(cells[exposureIndex]),
@@ -241,31 +399,49 @@ async function extractProductRows(page: Page, mapping: ProductIdMapping): Promis
 
     console.log(`[曝光] 第${pageNum}页: ${rows.length}行`);
 
-    if (!(await clickCurrentTableNext(page))) {
+    if (!(await advanceCurrentTable(page, signature))) {
       break;
     }
-
-    await page.waitForTimeout(2000);
   }
 
   if (skippedProductIdRows > 0) {
-    console.warn(`[曝光] 跳过${skippedProductIdRows}行: DOM ID 缺失且正则 ID 未命中商品总表映射`);
+    console.warn(`[曝光] 跳过${skippedProductIdRows}行: DOM ID 缺失且正则 ID 未命中`);
   }
 
-  return products;
+  if (duplicateProductRows > 0) {
+    console.warn(`[曝光] 跳过${duplicateProductRows}行: 商品ID重复`);
+  }
+
+  return {
+    products: Array.from(productsById.values()),
+    paginationStats: { pageRowCounts, uniquePageSignatures, duplicatePageSignatures, maxRepeatedSignatureAttempts, duplicateProductRows, skippedProductIdRows },
+  };
 }
 
 export async function collectExposurePage(config: AgentConfig, page: Page): Promise<ExposureCrawlResult> {
-  await ensureExposurePage(config, page);
-  const overview = await extractAllOverviews(page);
-  await page.waitForSelector('.ant-table-tbody tr', { timeout: 30000 }).catch(() => undefined);
   const mapping = await loadExposureFallbackMapping(config);
-  const products = await extractProductRows(page, mapping);
+  let lastResult: { overview: ExposureOverviewMetric[]; products: ExposureCumulativeProduct[]; paginationStats: ExposurePaginationStats } | null = null;
 
-  console.log(`[曝光] 总体概况: ${overview.length}个周期`);
-  console.log(`[曝光] 当前托管商品: ${products.length} 条`);
+  for (let attempt = 1; attempt <= MAX_EXPOSURE_COLLECTION_ATTEMPTS; attempt += 1) {
+    await ensureExposurePage(config, page);
+    const overview = await extractAllOverviews(page);
+    await page.waitForSelector('.ant-table-tbody tr', { timeout: 30000 }).catch(() => undefined);
+    const { products, paginationStats } = await extractProductRows(page, mapping);
+    lastResult = { overview, products, paginationStats };
 
-  return { overview, products, url: page.url() };
+    const reliable = products.length >= MIN_RELIABLE_EXPOSURE_PRODUCTS && paginationStats.uniquePageSignatures.length >= MIN_RELIABLE_EXPOSURE_WINDOWS;
+    if (reliable || attempt === MAX_EXPOSURE_COLLECTION_ATTEMPTS) {
+      console.log(`[曝光] 总体概况: ${overview.length}个周期`);
+      console.log(`[曝光] 当前托管商品: ${products.length} 条`);
+      return { overview, products, paginationStats, url: page.url() };
+    }
+
+    console.warn(`[曝光] 第${attempt}次抓取疑似不完整: 商品=${products.length}, 唯一窗口=${paginationStats.uniquePageSignatures.length}; 重新加载托管页重试`);
+    await page.waitForTimeout(3000);
+  }
+
+  if (!lastResult) throw new Error('曝光商品抓取未产生结果');
+  return { ...lastResult, url: page.url() };
 }
 
 export async function crawlExposurePage(config: AgentConfig): Promise<ExposureCrawlResult> {
