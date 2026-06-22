@@ -7,8 +7,10 @@
 ## 当前结论
 
 - 生产 PM2 进程 `mt-feishu-bot` 的 cwd 是 `C:\works\MT-agent`，也就是主 worktree。
-- 主 worktree 当前在 `master @ 1b2c8a6`，但存在 22 个未提交变更。在这些变更被归类前，不应继续在 `master` 直接开发、合并或重启部署。
-- `feature/closed-order-feedback` 正在开发中，且有未提交业务改动。治理动作只读观察，不清理、不合并、不回滚这条 worktree。
+- 主 worktree 当前在 `master @ 079db61`，工作树干净。`master` 仍只作为稳定集成与 PM2 运行目录，不承载日常开发。
+- `feature/closed-order-feedback` 功能已通过 `75d1d69 实现关单同步与观察流程` 进入 `master`，但保留 worktree 的 `dfa806a` 不是 `master` 祖先，后续只作为对照来源，不应直接 merge。
+- `codex/public-traffic-reliability-followup` 是当前最清晰的待评估合入候选，范围是公域抓取可靠性后续修正。
+- `feature/link-registry` 仍有独立价值，服务链接档案、同款分组和关单反馈置信度，但需要先 rebase 到最新 `master` 再验证。
 - 后续所有功能、修复、文档治理都必须先进入独立 worktree，验证通过后再按明确指令合入 `master`。
 - 不读取、打印或提交 `.env`、真实账号凭据、浏览器 profile、任何 secret。
 - 不 push、不重启 PM2，除非用户明确要求。
@@ -19,48 +21,35 @@
 
 | worktree | branch | 状态 | 处理规则 |
 |---|---|---|---|
-| `C:\works\MT-agent` | `master` | 脏，22 个变更 | 暂停直接开发；先做变更归类 |
+| `C:\works\MT-agent` | `master` | clean，`079db61` | 只做稳定集成与 PM2 运行目录 |
 
-### 正在开发，禁止清理
+### 保留对照或继续评估
 
 | worktree | branch | 状态 | 备注 |
 |---|---|---|---|
-| `.worktrees/closed-order-feedback` | `feature/closed-order-feedback` | 脏，开发中 | 关单反馈 API/provider/ingest 正在推进，治理动作不碰 |
+| `.worktrees/closed-order-feedback` | `feature/closed-order-feedback` | clean，1 个独立提交 | 功能已在 `master` 另行落地；保留作对照，不直接 merge |
+| `.worktrees/public-traffic-reliability-followup` | `codex/public-traffic-reliability-followup` | clean，1 个独立提交 | 公域抓取可靠性修正；优先评估合入 |
+| `.worktrees/link-registry` | `feature/link-registry` | 脏，3 个独立提交 + `.omo` 计划文档 | 链接档案覆盖与审计 CLI；建议 rebase 后继续推进 |
+| `.worktrees/worktree-governance` | `codex/worktree-governance` | clean，治理文档分支 | 维护本文档，更新后可评估合入 |
 
-### 仍有未合入提交，需要单独评估
+### 设计参考或旧实现参考
 
 | worktree | branch | branch ahead | 状态 | 建议 |
 |---|---|---:|---|---|
-| `.worktrees/feishu-bot-natural-question-routing` | `feature/feishu-bot-natural-question-routing` | 5 | clean | 和飞书自然问句、只读查询相关；后续如需要，应 rebase 到最新 `master` 后重新验证 |
-| `.worktrees/goods-manager-new-products` | `feature/goods-manager-new-products` | 1 | clean | v1 新品池接入；可能已被 v2 覆盖，合并前先确认是否仍有价值 |
-| `.worktrees/link-registry` | `feature/link-registry` | 3 | 脏，只有 `.omo` 文档 | 分类覆盖、审计 CLI 增强；与当前 ID 互查/档案能力有交叉，需谨慎重放 |
+| `.worktrees/feishu-bot-natural-question-routing` | `feature/feishu-bot-natural-question-routing` | 5 | clean | 自然问句旧实现；`master` 已有后续协调实现，作为参考而非整体合并来源 |
 | `.worktrees/llm-routing-design-plan` | `feature/llm-routing-design-plan` | 4 | 脏，文档改动 | 文档明确说不要直接合并其中只读 registry 实现，应作为设计参考而不是合并来源 |
 
-### 已被 master 包含或明显落后，候选归档
+### 已被 master 包含或被主线替代，候选归档
 
-这些 worktree 的 branch tip 当前不比 `master` 多提交。归档前仍要确认是否有未提交文件。
+这些 worktree 的 branch tip 当前不比 `master` 多提交，或功能已被主线更新实现替代。带未跟踪文件的 worktree 不能强制删除，除非用户明确同意丢弃那些文件。
 
 ```text
-agent-data-understanding
-agent-mvp
-agent-runtime
-command-analysis-tests
-dashboard-refresh-modularization
-differential-pricing-progress
-feishu-bot-readonly-command-agent
-feishu-confirmation-boundary
-feishu-readonly-tool-registry
-goods-manager-new-products-v2
-llm-provider-contract
-merge-to-master
-new-link-cold-start-card
-operations-learning-loop
-public-traffic-capture-decoupling
-public-traffic-card-tables
-rental-price-agent-skill
+agent-runtime                         branch 已被 master 包含；仅剩未跟踪 .omo 草稿
+public-traffic-capture-decoupling      branch 已被 master 包含；仅剩未跟踪 .omo 草稿
+public-traffic-card-tables             branch 已被 master 包含；仍有 product-id-map 配置改动，需单独确认
 ```
 
-`.worktrees/public-traffic-report` 不是注册 worktree，当前只看到 `output` 目录，后续可在确认无价值后清理。
+`feature/goods-manager-new-products` worktree 已删除，branch 保留；该 v1 新品池接入已被 `master` 中的新品池 v2/明细实现替代。
 
 ## 日常开发规程
 
@@ -327,3 +316,49 @@ codex/worktree-governance: clean after latest governance commit
 codex/public-traffic-reliability-followup: clean after commit 3025548
 feature/closed-order-feedback: dirty, intentionally preserved
 ```
+
+### 5. 2026-06-22 二次复核与清理
+
+复核后当前主线状态：
+
+```text
+C:\works\MT-agent
+branch: master
+head: 079db61 Merge branch 'codex/rental-price-agent-skill-vendor'
+status: clean
+```
+
+已删除 worktree：
+
+```text
+.worktrees/goods-manager-new-products
+```
+
+说明：该 worktree 对应的是 goods-manager 新品池 v1 接入，后续主线已有新品池 v2/明细实现；本次只删除 worktree，不删除 `feature/goods-manager-new-products` branch。
+
+暂缓删除：
+
+```text
+.worktrees/agent-runtime
+.worktrees/public-traffic-capture-decoupling
+```
+
+说明：这两条 branch tip 已被 `master` 包含，但 worktree 内仍有未跟踪 `.omo` 交接草稿。除非用户明确同意丢弃这些草稿，否则不使用 `git worktree remove --force`。
+
+继续保留并评估：
+
+```text
+.worktrees/public-traffic-reliability-followup
+.worktrees/link-registry
+.worktrees/worktree-governance
+.worktrees/closed-order-feedback
+.worktrees/feishu-bot-natural-question-routing
+.worktrees/llm-routing-design-plan
+.worktrees/public-traffic-card-tables
+```
+
+下一步建议：
+
+- 优先评估 `codex/public-traffic-reliability-followup` 是否合入 `master`。
+- 将 `feature/link-registry` rebase 到最新 `master` 后重新跑 link registry 相关测试。
+- 单独确认 `public-traffic-card-tables` 中的 `config/product-id-map*.json` 改动是要吸收、备份还是丢弃。
