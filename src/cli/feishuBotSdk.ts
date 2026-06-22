@@ -3,7 +3,7 @@ import { createAgentPlannerProvider } from '../agentRuntime/llmPlanner.js';
 import { loadEnv } from '../config/loadEnv.js';
 import { createFeishuSdkBot } from '../feishuBot/sdkClient.js';
 import { createLlmToolSelector } from '../feishuBot/llmToolSelector.js';
-import { createLlmProviderFromEnv } from '../llm/openAiCompatibleProvider.js';
+import { createLlmProviderFromEnv, formatLlmProviderEnvSummary, summarizeLlmProviderEnv } from '../llm/openAiCompatibleProvider.js';
 
 export async function main(): Promise<void> {
   await loadEnv();
@@ -11,6 +11,7 @@ export async function main(): Promise<void> {
   const appSecret = process.env.FEISHU_APP_SECRET;
 
   if (!appId || !appSecret) throw new Error('FEISHU_APP_ID and FEISHU_APP_SECRET are required for feishu-bot:sdk');
+  console.log(`MT-agent LLM planner: ${formatLlmProviderEnvSummary(summarizeLlmProviderEnv(process.env))}`);
   const llmProvider = createLlmProviderFromEnv(process.env);
 
   const bot = createFeishuSdkBot({
