@@ -17,6 +17,7 @@ describe('agent runtime tool registry', () => {
       'rental.pricePreview',
       'rental.operationConfirmRequest',
     ]);
+    expect(listAgentTools().map((tool) => tool.name)).not.toContain('rental.newLinkBatchPlan');
   });
 
   it('finds tools by name without exposing mutable registry state', () => {
@@ -70,5 +71,16 @@ describe('agent runtime tool registry', () => {
     expect(findAgentTool('publicTraffic.crawlSources')).toMatchObject({ risk: 'write', requiresConfirmation: true });
     expect(findAgentTool('rental.pricePreview')).toMatchObject({ risk: 'high', requiresConfirmation: true });
     expect(findAgentTool('rental.operationConfirmRequest')).toMatchObject({ risk: 'high', requiresConfirmation: true });
+  });
+
+  it('keeps rental operation metadata atomic instead of workflow-specific', () => {
+    expect(findAgentTool('rental.operationConfirmRequest')?.inputSchema).toMatchObject({
+      properties: {
+        action: { type: 'string' },
+        productId: { type: 'string' },
+      },
+      required: ['action', 'productId'],
+      additionalProperties: false,
+    });
   });
 });

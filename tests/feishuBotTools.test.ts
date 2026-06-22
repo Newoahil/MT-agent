@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { AgentPlannerProvider } from '../src/agentRuntime/planner.js';
 import type { LlmIntentProposalProvider } from '../src/feishuBot/llmIntentProposal.js';
 import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 import type { RentalPriceSkillClient } from '../src/feishuBot/rentalPrice.js';
@@ -249,6 +250,64 @@ describe('handleBotIntent', () => {
     const response = await handleBotIntent({ type: 'unknown', text: '帮我看看苹果手机' }, outputDir, { llmToolSelector: selector });
 
     expect(response.text).toContain('端内ID 565 iPhone 15');
+  });
+
+  it('uses the generic agent planner to run safe registered tools', async () => {
+    const outputDir = await writeContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan(request) {
+        expect(request.message).toBe('帮我看看苹果手机');
+        expect(request.tools.map((tool) => tool.name)).toContain('product.query');
+        expect(request.workflows.map((workflow) => workflow.name)).toContain('rental.newLinkBatch');
+        return JSON.stringify({
+          goal: '查询商品表现',
+          selectedTool: 'product.query',
+          arguments: { keyword: 'iPhone' },
+          confidence: 0.92,
+          reason: '用户要查看苹果手机表现',
+        });
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '帮我看看苹果手机' }, outputDir, { agentPlannerProvider: planner });
+
+    expect(response.text).toContain('端内ID 565 iPhone 15');
+  });
+
+  it('turns high-risk generic agent plans into approval cards without side effects', async () => {
+    const planner: AgentPlannerProvider = {
+      async proposePlan(request) {
+        expect(request.tools.map((tool) => tool.name)).toContain('rental.operationConfirmRequest');
+        return JSON.stringify({
+          goal: '下架租赁商品',
+          selectedTool: 'rental.operationConfirmRequest',
+          arguments: { action: 'delist', productId: '761' },
+          confidence: 0.95,
+          reason: '用户要求下架商品 761',
+          requiresConfirmation: true,
+        });
+      },
+    };
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run before approval'); },
+      async execute() { throw new Error('execute should not run before approval'); },
+      async copy() { throw new Error('copy should not run before approval'); },
+      async delist() { throw new Error('delist should not run before approval'); },
+      async tenancySet() { throw new Error('tenancySet should not run before approval'); },
+      async specDiscover() { throw new Error('specDiscover should not run before approval'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run before approval'); },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '帮我把 761 下架' }, 'output', {
+      agentPlannerProvider: planner,
+      rentalPriceClient,
+    });
+
+    expect(response.text).toContain('请确认 Agent 操作：rental.operationConfirmRequest');
+    expect(response.card).toBeDefined();
+    expect(JSON.stringify(response.card)).toContain('agent_tool_confirm');
+    expect(JSON.stringify(response.card)).toContain('delist');
+    expect(JSON.stringify(response.card)).toContain('761');
   });
 
   it('returns a confirmation card for LLM-proposed rental delist without executing the daemon', async () => {

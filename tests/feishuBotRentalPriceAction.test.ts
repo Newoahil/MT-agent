@@ -157,6 +157,48 @@ describe('rental price card action', () => {
     expect(sent.some((item) => JSON.stringify(item).includes('已经执行完成'))).toBe(true);
   });
 
+  it('executes generic agent tool confirmations through the decoupled tool module', async () => {
+    const calls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run for operation confirmation'); },
+      async execute() { throw new Error('price execute should not run for operation confirmation'); },
+      async copy() { throw new Error('copy should not run for delist confirmation'); },
+      async delist(productId) {
+        calls.push(`delist:${productId}`);
+        return { productId, ok: true, lines: ['delist: ok'] };
+      },
+      async tenancySet() { throw new Error('tenancySet should not run for delist confirmation'); },
+      async specDiscover() { throw new Error('specDiscover should not run for delist confirmation'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run for delist confirmation'); },
+    };
+    const registered: Record<string, (data: unknown) => Promise<void>> = {};
+    const sent: unknown[] = [];
+    const bot = createFeishuSdkBot({ appId: 'app', appSecret: 'secret', sdk: fakeSdk(sent, registered), rentalPriceClient });
+
+    bot.start();
+    await registered['card.action.trigger']({
+      event: {
+        context: { open_message_id: 'om-agent-tool-confirm' },
+        action: {
+          value: {
+            action: 'agent_tool_confirm',
+            request: {
+              toolName: 'rental.operationConfirmRequest',
+              arguments: { action: 'delist', productId: '761' },
+              reason: '用户要求下架商品 761',
+            },
+          },
+        },
+      },
+    });
+
+    await waitFor(() => calls.length === 1 && sent.some((item) => JSON.stringify(item).includes('Agent 操作已完成')));
+    expect(calls).toEqual(['delist:761']);
+    expect(sent.some((item) => JSON.stringify(item).includes('Agent 操作处理中'))).toBe(true);
+    expect(sent.some((item) => JSON.stringify(item).includes('下架成功：商品 761'))).toBe(true);
+    expect(sent.filter((item) => JSON.stringify(item).includes('Agent 操作已完成')).every((item) => JSON.stringify(item).includes('"kind":"patch"'))).toBe(true);
+  });
+
   it('rejects forged rental operation confirmations', () => {
     expect(parseRentalOperationConfirmRequest({ request: { action: 'delist', productId: '761' } })).toEqual({ action: 'delist', productId: '761' });
     expect(parseRentalOperationConfirmRequest({ request: { action: 'delete-everything', productId: '761' } })).toBeNull();

@@ -1,4 +1,7 @@
 import { join } from 'node:path';
+import { buildAgentToolConfirmCard } from '../agentRuntime/approvalCard.js';
+import { listAgentPlannerTools, validateAgentPlannerProposal, type AgentPlannerProvider } from '../agentRuntime/planner.js';
+import { listAgentWorkflows } from '../agentRuntime/workflowRegistry.js';
 import { parseAgentDataIntent } from '../agentData/intent.js';
 import { runPublicTrafficReportCli } from '../cli/publicTrafficReport.js';
 import { loadClosedOrderIngestState } from '../closedOrderFeedback/ingest.js';
@@ -9,6 +12,7 @@ import { sendFeishuCard } from '../notify/feishu.js';
 import { startOperationsLearningSession, summarizeOperationsLearningHistory, summarizeOperationsLearningSession } from '../operationsLearningLoop/session.js';
 import { buildPublicTrafficCard } from '../publicTraffic/buildPublicTrafficCard.js';
 import { buildPublicTrafficFeishuText } from '../publicTraffic/buildPublicTrafficFeishu.js';
+import { executeAgentToolRequest } from './agentToolExecutor.js';
 import { buildClosedOrderObservationCard } from './closedOrderObservationCard.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
 import { buildIdLookupCard } from './idLookupCard.js';
@@ -66,6 +70,7 @@ const HELP_TEXT = `📋 数据查询
 export interface HandleBotIntentOptions {
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
+  agentPlannerProvider?: AgentPlannerProvider;
   rentalPriceClient?: RentalPriceSkillClient;
   closedOrderFetchImpl?: typeof fetch;
   closedOrderRegistryPaths?: ClosedOrderRegistryPathsInput;
@@ -115,6 +120,34 @@ function formatClosedOrderObservationSummary(
 ): string {
   const base = `关单观察 ${report.date}：近 ${report.windowDays} 天 ${report.summary.recordCount} 条，今日 ${report.summary.todayRecordCount} 条，重点分组 ${report.summary.groupCount} 个，需人工复核 ${report.summary.manualReviewGroupCount} 个。`;
   return artifactMarkdownPath ? `${base}\n报告已写入：${artifactMarkdownPath}` : base;
+}
+
+async function agentPlannerResponse(
+  message: string,
+  outputDir: string,
+  options: HandleBotIntentOptions,
+): Promise<BotResponse | null> {
+  if (!options.agentPlannerProvider) return null;
+  const rawProposal = await options.agentPlannerProvider.proposePlan({
+    message,
+    tools: listAgentPlannerTools(),
+    workflows: listAgentWorkflows(),
+  });
+  const parsed = validateAgentPlannerProposal(rawProposal);
+  if (!parsed.ok) return null;
+
+  const request = {
+    toolName: parsed.proposal.selectedTool,
+    arguments: parsed.proposal.arguments,
+    reason: parsed.proposal.reason,
+  };
+  if (parsed.policy.decision === 'allow') {
+    return executeAgentToolRequest(request, outputDir, { rentalPriceClient: options.rentalPriceClient });
+  }
+  return {
+    text: `请确认 Agent 操作：${parsed.proposal.selectedTool}`,
+    card: buildAgentToolConfirmCard(request),
+  };
 }
 
 export async function handleBotIntent(intent: BotIntent, outputDir = 'output', options: HandleBotIntentOptions = {}): Promise<BotResponse> {
@@ -264,7 +297,12 @@ export async function handleBotIntent(intent: BotIntent, outputDir = 'output', o
     const dataIntent = parseAgentDataIntent(intent.text);
     const tool = findReadOnlyTool(dataIntent);
     const latest = await findLatestReportContext(outputDir);
-    if (tool) return latest ? tool.run(latest.context, dataIntent) : { text: '还没有找到公域日报上下文。' };
+    if (tool && latest) return tool.run(latest.context, dataIntent);
+
+    const plannedResponse = await agentPlannerResponse(intent.text, outputDir, options);
+    if (plannedResponse) return plannedResponse;
+
+    if (tool) return { text: '还没有找到公域日报上下文。' };
     if (!options.llmToolSelector) return { text: UNKNOWN_GUIDANCE };
     if (!latest) return { text: '还没有找到公域日报上下文。' };
 
