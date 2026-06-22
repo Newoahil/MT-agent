@@ -77,7 +77,7 @@ function compactModelName(name: string): string | null {
   return null;
 }
 
-function cleanProductName(productName: string): string {
+export function canonicalProductShortName(productName: string): string {
   let name = productName.trim();
   name = name.replace(/in\s+tax/gi, 'instax').replace(/in\s+ta360/gi, 'Insta360');
   for (const prefix of BRAND_PREFIXES) name = name.replaceAll(prefix, ' ');
@@ -90,7 +90,7 @@ export function resolveProductDisplayName(row: PublicTrafficProductDataRow, prod
   const mappedName = productNameMap[internalProductId(row.displayProductId)]?.trim();
   if (mappedName) return truncate(mappedName, MAPPED_LIMIT);
 
-  const cleaned = cleanProductName(row.productName);
+  const cleaned = canonicalProductShortName(row.productName);
   if (cleaned) return truncate(cleaned, FALLBACK_LIMIT);
 
   return row.displayProductId;

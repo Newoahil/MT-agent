@@ -95,6 +95,21 @@ describe('closed order feedback fake provider', () => {
     expect(noisyRemark.recommendedAction).toBe('manual_review_only');
   });
 
+  it('ignores trailing risk template text when inferring reason tags', async () => {
+    const feedback = await buildClosedOrderConfidenceFeedback(
+      {
+        closeId: 'close-template-tail',
+        closedAt: '2026-06-18T00:00:00.000Z',
+        internalProductId: '701',
+        rawRemark: '【商户备注】联系不上\n该用户综合判断其履约能力和意愿较强，推荐风控评估比例50%\n共租风险：无共租行为',
+      },
+      createLinkRegistryQuery(registryEntries),
+    );
+
+    expect(feedback.reasonTags).toEqual(['service']);
+    expect(feedback.inferredReason).toBe('service');
+  });
+
   it('allows missing closeId and closedAt but marks data completeness incomplete', async () => {
     const feedback = await buildClosedOrderConfidenceFeedback(
       { internalProductId: '701', rawRemark: '价格太低' },

@@ -1,28 +1,74 @@
-import { runPublicTrafficReportCli } from '../cli/publicTrafficReport.js';
-import { sendFeishuCard } from '../notify/feishu.js';
+import { join } from 'node:path';
 import { parseAgentDataIntent } from '../agentData/intent.js';
+import { runPublicTrafficReportCli } from '../cli/publicTrafficReport.js';
+import { loadClosedOrderIngestState } from '../closedOrderFeedback/ingest.js';
+import { buildClosedOrderObservationReport, writeClosedOrderObservationReportArtifacts } from '../closedOrderFeedback/observation.js';
+import { loadClosedOrderRegistryContext, type ClosedOrderRegistryPathsInput } from '../closedOrderFeedback/runtime.js';
+import { syncClosedOrderFeedbackFromApi } from '../closedOrderFeedback/sync.js';
+import { sendFeishuCard } from '../notify/feishu.js';
+import { startOperationsLearningSession, summarizeOperationsLearningHistory, summarizeOperationsLearningSession } from '../operationsLearningLoop/session.js';
 import { buildPublicTrafficCard } from '../publicTraffic/buildPublicTrafficCard.js';
 import { buildPublicTrafficFeishuText } from '../publicTraffic/buildPublicTrafficFeishu.js';
-import { startOperationsLearningSession, summarizeOperationsLearningHistory, summarizeOperationsLearningSession } from '../operationsLearningLoop/session.js';
+import { buildClosedOrderObservationCard } from './closedOrderObservationCard.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
 import { buildIdLookupCard } from './idLookupCard.js';
-import { buildRentalOperationConfirmCard, buildRentalPricePreviewCard, createRentalPriceSkillClient, type RentalOperationConfirmRequest, type RentalPriceSkillClient } from './rentalPrice.js';
-import { findLatestReportContext, formatLatestSummary, formatProductRows, queryProductRows } from './reportStore.js';
-import { parseLlmToolSelection, type LlmToolSelectionProvider } from './llmProvider.js';
 import { getSupportedLlmIntentProposals, parseLlmIntentProposal, type LlmIntentProposalProvider } from './llmIntentProposal.js';
 import { runReadOnlyToolSelection } from './llmReadOnlyToolAdapter.js';
+import { parseLlmToolSelection, type LlmToolSelectionProvider } from './llmProvider.js';
 import { getRegistryBackedLlmTools } from './llmToolSelector.js';
+import {
+  buildRentalOperationConfirmCard,
+  buildRentalPricePreviewCard,
+  createRentalPriceSkillClient,
+  type RentalOperationConfirmRequest,
+  type RentalPriceSkillClient,
+} from './rentalPrice.js';
 import { findReadOnlyTool } from './readOnlyToolRegistry.js';
+import { findLatestReportContext, formatLatestSummary, formatProductRows, queryProductRows } from './reportStore.js';
 import type { BotIntent, BotResponse } from './types.js';
 
 let running = false;
 
 const UNKNOWN_GUIDANCE = '我现在可以查：今日概况、商品、新链接池、待处理任务、转化差、曝光低、高潜力、下架链接、订单情况。你可以问“新链接池怎么样”或“查一下721”。';
 
+const HELP_TEXT = `📋 数据查询
+  今日概况 — 查看今日公域流量概况
+  查询 565 — 按关键词查询商品
+  查ID 565 — 端内ID与平台商品ID互查
+  商品ID互查 — 打开常驻ID互查卡片
+  查看规格 761 — 查看商品规格维度与项目
+
+📊 报表操作
+  跑日报 — 生成公域流量日报
+  重发日报 — 重新发送最新日报
+  推送日报到群 — 推送日报到指定群
+  同步关单 — 拉取最新关单并写入本地状态
+  跑关单观察 — 生成关单观察摘要并回卡片
+
+🎓 运营学习
+  运营学习 — 开始运营学习测验
+
+💰 租赁改价
+  改价 761 1天22 10天55 — 指定租期改价（格式：改价 ID 租期1价格1 租期2价格2 ...）
+  改价 761 全局改价 0.9 — 全局折扣（所有租金字段 ×0.9）
+  改价 761 全部租金九折 — 全部租金九折
+  改价 761 所有价格 *0.9 — 所有价格乘法（含押金、成本等）
+
+🔧 商品操作
+  复制商品 761 — 复制商品
+  下架商品 761 — 下架商品
+  设置租期 761 1,10,30 — 设置租期天数
+  添加规格 761 128G — 添加规格项
+
+❓ 帮助
+  帮助 — 显示此帮助信息`;
+
 export interface HandleBotIntentOptions {
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
   rentalPriceClient?: RentalPriceSkillClient;
+  closedOrderFetchImpl?: typeof fetch;
+  closedOrderRegistryPaths?: ClosedOrderRegistryPathsInput;
 }
 
 function rentalIntentToConfirmRequest(intent: BotIntent): RentalOperationConfirmRequest | null {
@@ -46,37 +92,58 @@ function rentalOperationConfirmResponse(request: RentalOperationConfirmRequest, 
   return { text: `请确认租赁商品操作：${request.productId}`, card: buildRentalOperationConfirmCard(request, reason) };
 }
 
+function closedOrderIngestStatePath(outputDir: string): string {
+  return join(outputDir, 'state', 'closed-order-feedback-ingest.json');
+}
+
+function closedOrderObservationArtifactPaths(outputDir: string, reportDate: string): { jsonPath: string; markdownPath: string } {
+  const baseDir = join(outputDir, 'closed-order-observation');
+  const baseName = `closed-order-observation-${reportDate}`;
+  return {
+    jsonPath: join(baseDir, `${baseName}.json`),
+    markdownPath: join(baseDir, `${baseName}.md`),
+  };
+}
+
+function formatClosedOrderSyncSummary(result: Awaited<ReturnType<typeof syncClosedOrderFeedbackFromApi>>): string {
+  return `关单同步完成：拉取 ${result.fetchedCount} 条，新增 ${result.addedCount} 条，更新 ${result.updatedCount} 条，累计 ${result.totalCount} 条。`;
+}
+
+function formatClosedOrderObservationSummary(
+  report: Awaited<ReturnType<typeof buildClosedOrderObservationReport>>,
+  artifactMarkdownPath?: string,
+): string {
+  const base = `关单观察 ${report.date}：近 ${report.windowDays} 天 ${report.summary.recordCount} 条，今日 ${report.summary.todayRecordCount} 条，重点分组 ${report.summary.groupCount} 个，需人工复核 ${report.summary.manualReviewGroupCount} 个。`;
+  return artifactMarkdownPath ? `${base}\n报告已写入：${artifactMarkdownPath}` : base;
+}
+
 export async function handleBotIntent(intent: BotIntent, outputDir = 'output', options: HandleBotIntentOptions = {}): Promise<BotResponse> {
   if (intent.type === 'help') {
-    return { text: `📋 数据查询
-  今日概况 — 查看今日公域流量概况
-  查询 565 — 按关键词查询商品
-  查ID 565 — 端内ID与平台商品ID互查
-  商品ID互查 — 打开常驻ID互查卡片
-  查看规格 761 — 查看商品规格维度与项目
+    return { text: HELP_TEXT };
+  }
 
-📊 报表操作
-  跑日报 — 生成公域流量日报
-  重发日报 — 重新发送最新日报
-  推送日报到群 — 推送日报到指定群
+  if (intent.type === 'sync_closed_order_feedback') {
+    const result = await syncClosedOrderFeedbackFromApi(
+      closedOrderIngestStatePath(outputDir),
+      process.env,
+      20,
+      options.closedOrderFetchImpl ?? fetch,
+    );
+    return { text: formatClosedOrderSyncSummary(result) };
+  }
 
-🎓 运营学习
-  运营学习 — 开始运营学习测验
-
-💰 租赁改价
-  改价 761 1天22 10天55 — 指定租期改价（格式：改价 ID 租期1价格1 租期2价格2 ...）
-  改价 761 全局改价 0.9 — 全局折扣（所有租金字段 ×0.9）
-  改价 761 全部租金九折 — 全部租金九折
-  改价 761 所有价格 *0.9 — 所有价格乘法（含押金、成本等）
-
-🔧 商品操作
-  复制商品 761 — 复制商品
-  下架商品 761 — 下架商品
-  设置租期 761 1,10,30 — 设置租期天数
-  添加规格 761 128G — 添加规格项
-
-❓ 帮助
-  帮助 — 显示此帮助信息` };
+  if (intent.type === 'run_closed_order_observation_report') {
+    const [state, registryContext] = await Promise.all([
+      loadClosedOrderIngestState(closedOrderIngestStatePath(outputDir)),
+      loadClosedOrderRegistryContext(options.closedOrderRegistryPaths),
+    ]);
+    const report = await buildClosedOrderObservationReport(state.items, registryContext.query);
+    const artifactPaths = closedOrderObservationArtifactPaths(outputDir, report.date);
+    await writeClosedOrderObservationReportArtifacts(artifactPaths.jsonPath, artifactPaths.markdownPath, report);
+    return {
+      text: formatClosedOrderObservationSummary(report, artifactPaths.markdownPath),
+      card: buildClosedOrderObservationCard(report),
+    };
   }
 
   if (intent.type === 'latest_summary') {

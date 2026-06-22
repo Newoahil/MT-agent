@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { handleBotIntent } from '../src/feishuBot/tools.js';
-import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 import type { LlmIntentProposalProvider } from '../src/feishuBot/llmIntentProposal.js';
+import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 import type { RentalPriceSkillClient } from '../src/feishuBot/rentalPrice.js';
+import { handleBotIntent } from '../src/feishuBot/tools.js';
 
 const summary = {
   exposure: 1000,
@@ -68,6 +68,33 @@ async function writeContext(): Promise<string> {
   return dir;
 }
 
+async function writeClosedOrderRegistryFixtures(rootDir: string): Promise<{
+  productIdMapPath: string;
+  productNameMapPath: string;
+  firstSeenPath: string;
+  lifecyclePath: string;
+  artifactsDir: string;
+}> {
+  const configDir = join(rootDir, 'config');
+  const outputDir = join(rootDir, 'output');
+  await mkdir(configDir, { recursive: true });
+  await mkdir(join(outputDir, 'state'), { recursive: true });
+  await mkdir(join(outputDir, '2026-06-21'), { recursive: true });
+  await writeFile(join(configDir, 'product-id-map.json'), JSON.stringify({ 'platform-560': '560', 'platform-561': '561' }), 'utf8');
+  await writeFile(join(configDir, 'product-name-map.json'), JSON.stringify({ '560': 'DJI Pocket 3', '561': 'DJI Pocket 3 Creator' }), 'utf8');
+  await writeFile(join(outputDir, '2026-06-21', 'exposure-cumulative-products.json'), JSON.stringify([
+    { platformProductId: 'platform-560', productName: 'DJI Pocket 3 Creator Combo' },
+    { platformProductId: 'platform-561', productName: 'DJI Pocket 3 Standard' },
+  ]), 'utf8');
+  return {
+    productIdMapPath: join(configDir, 'product-id-map.json'),
+    productNameMapPath: join(configDir, 'product-name-map.json'),
+    firstSeenPath: join(outputDir, 'state', 'goods-first-seen.json'),
+    lifecyclePath: join(outputDir, 'state', 'goods-link-lifecycle.json'),
+    artifactsDir: outputDir,
+  };
+}
+
 describe('handleBotIntent', () => {
   it('returns help text', async () => {
     await expect(handleBotIntent({ type: 'help' })).resolves.toEqual({ text: `📋 数据查询
@@ -81,6 +108,8 @@ describe('handleBotIntent', () => {
   跑日报 — 生成公域流量日报
   重发日报 — 重新发送最新日报
   推送日报到群 — 推送日报到指定群
+  同步关单 — 拉取最新关单并写入本地状态
+  跑关单观察 — 生成关单观察摘要并回卡片
 
 🎓 运营学习
   运营学习 — 开始运营学习测验
@@ -275,5 +304,77 @@ describe('handleBotIntent', () => {
     expect(JSON.stringify(response.card)).toContain('rental_price_confirm');
     expect(JSON.stringify(response.card)).toContain('rent1day');
     expect(JSON.stringify(response.card)).toContain('22.00');
+  });
+
+  it('syncs closed-order feedback through the bot command', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'mt-agent-closed-order-bot-sync-'));
+    const fetchImpl = async () => new Response(JSON.stringify({
+      source_app_code: 'order_dispatch',
+      items: [
+        {
+          id: 'close-1',
+          order_no: 'SH202606220001',
+          goods_id: '560',
+          merchant: 'merchant-A',
+          merchant_remark: '价格太低',
+          captured_at: '2026-06-22T01:00:00Z',
+          received_at: '2026-06-22T01:05:00Z',
+        },
+      ],
+    }), { status: 200 });
+
+    process.env.CLOSED_ORDER_REMARKS_BASE_URL = 'https://hub.leejh.cyou';
+    process.env.CLOSED_ORDER_REMARKS_API_TOKEN = 'secret-token';
+    process.env.CLOSED_ORDER_REMARKS_SOURCE_APP_CODE = 'order_dispatch';
+
+    const response = await handleBotIntent({ type: 'sync_closed_order_feedback' }, outputDir, { closedOrderFetchImpl: fetchImpl as typeof fetch });
+    expect(response.text).toContain('关单同步完成');
+    expect(response.text).toContain('新增 1 条');
+    await expect(readFile(join(outputDir, 'state', 'closed-order-feedback-ingest.json'), 'utf8')).resolves.toContain('close:close-1');
+  });
+
+  it('returns a closed-order observation card through the bot command', async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), 'mt-agent-closed-order-bot-report-'));
+    const registryRoot = await mkdtemp(join(tmpdir(), 'mt-agent-closed-order-registry-'));
+    const registryPaths = await writeClosedOrderRegistryFixtures(registryRoot);
+    await mkdir(join(outputDir, 'state'), { recursive: true });
+    await writeFile(join(outputDir, 'state', 'closed-order-feedback-ingest.json'), JSON.stringify({
+      version: 1,
+      items: [
+        {
+          dedupeKey: 'close:close-1',
+          closeId: 'close-1',
+          internalProductId: '560',
+          rawRemark: '价格太低，不接单',
+          closedAt: '2026-06-22T01:00:00.000Z',
+          firstIngestedAt: '2026-06-22T01:05:00.000Z',
+          lastIngestedAt: '2026-06-22T01:05:00.000Z',
+          seenCount: 1,
+        },
+        {
+          dedupeKey: 'close:close-2',
+          closeId: 'close-2',
+          internalProductId: '561',
+          rawRemark: '库存不足',
+          closedAt: '2026-06-21T08:00:00.000Z',
+          firstIngestedAt: '2026-06-21T08:05:00.000Z',
+          lastIngestedAt: '2026-06-21T08:05:00.000Z',
+          seenCount: 1,
+        },
+      ],
+    }), 'utf8');
+
+    const response = await handleBotIntent(
+      { type: 'run_closed_order_observation_report' },
+      outputDir,
+      { closedOrderRegistryPaths: registryPaths },
+    );
+    expect(response.text).toContain('关单观察');
+    expect(response.text).toContain('报告已写入');
+    expect(response.card).toBeDefined();
+    expect(JSON.stringify(response.card)).toContain('重点分组');
+    expect(JSON.stringify(response.card)).toContain('DJI Pocket 3');
+    expect(JSON.stringify(response.card)).toContain('价格信号');
+    await expect(readFile(join(outputDir, 'closed-order-observation', 'closed-order-observation-2026-06-22.md'), 'utf8')).resolves.toContain('关单观察 2026-06-22');
   });
 });

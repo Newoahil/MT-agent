@@ -7,15 +7,28 @@ function hasText(value: string | undefined): boolean {
   return Boolean(value?.trim());
 }
 
+function remarkForInference(rawRemark: string): string {
+  const lines = rawRemark
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const merchantLines: string[] = [];
+  for (const line of lines) {
+    if (/^该用户综合判断/.test(line) || /^共租风险[:：]/.test(line)) break;
+    merchantLines.push(line.replace(/^【商户备注】/, '').trim());
+  }
+  return merchantLines.join(' ').trim() || rawRemark.trim();
+}
+
 export function inferClosedOrderReasonTags(rawRemark: string): ClosedOrderReasonTag[] {
-  const remark = rawRemark.trim();
+  const remark = remarkForInference(rawRemark);
   if (!remark) return ['unclear'];
 
   const tags: ClosedOrderReasonTag[] = [];
   if (/价格|价低|价高|涨价|降价|太低|太高/.test(remark)) tags.push('pricing');
   if (/规格|套餐|租期|型号|配置/.test(remark)) tags.push('spec');
   if (/库存|缺货|无货|没货/.test(remark)) tags.push('inventory');
-  if (/服务|态度|沟通|客服/.test(remark)) tags.push('service');
+  if (/服务|态度|沟通|客服|联系不上|不通|留言|失联/.test(remark)) tags.push('service');
   if (/物流|快递|配送|发货/.test(remark)) tags.push('logistics');
 
   if (tags.length > 0) return tags;
@@ -68,6 +81,8 @@ export async function buildClosedOrderConfidenceFeedback(input: ClosedOrderFeedb
     rawRemark,
     closeId: input.closeId,
     closedAt: input.closedAt,
+    orderNo: input.orderNo,
+    merchant: input.merchant,
     inferredReason: reasonTags[0],
     reasonTags,
     sameSkuGroupId,

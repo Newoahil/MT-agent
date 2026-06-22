@@ -80,6 +80,8 @@ function canonicalizeIntent(intent: BotIntent): BotIntent {
     case 'operations_learning_history':
     case 'lookup_product_id_card':
     case 'push_latest_report_to_group':
+    case 'sync_closed_order_feedback':
+    case 'run_closed_order_observation_report':
       return { type: intent.type };
     case 'run_public_traffic_report':
     case 'resend_latest_report':

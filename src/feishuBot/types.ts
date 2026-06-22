@@ -8,6 +8,8 @@ export type BotIntent =
   | { type: 'run_public_traffic_report'; sendTo?: FeishuSendTo }
   | { type: 'resend_latest_report'; sendTo?: FeishuSendTo }
   | { type: 'push_latest_report_to_group' }
+  | { type: 'sync_closed_order_feedback' }
+  | { type: 'run_closed_order_observation_report' }
   | { type: 'latest_summary' }
   | { type: 'operations_learning_quiz' }
   | { type: 'operations_learning_summary' }
