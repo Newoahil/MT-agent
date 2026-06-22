@@ -4,6 +4,17 @@ const noArgumentsSchema = { type: 'object', additionalProperties: false };
 const keywordArgumentsSchema = { type: 'object', properties: { keyword: { type: 'string' } }, required: ['keyword'], additionalProperties: false };
 const productIdArgumentsSchema = { type: 'object', properties: { productId: { type: 'string' } }, required: ['productId'], additionalProperties: false };
 const goodsExportPathArgumentsSchema = { type: 'object', properties: { goodsExportPath: { type: 'string' } }, required: ['goodsExportPath'], additionalProperties: false };
+const rentalOperationArgumentsSchema = {
+  type: 'object',
+  properties: {
+    action: { type: 'string' },
+    productId: { type: 'string' },
+    days: { type: 'string' },
+    itemTitle: { type: 'string' },
+  },
+  required: ['action', 'productId'],
+  additionalProperties: false,
+};
 
 const agentTools: AgentToolDefinition[] = [
   {
@@ -57,10 +68,10 @@ const agentTools: AgentToolDefinition[] = [
   },
   {
     name: 'rental.operationConfirmRequest',
-    description: '生成租赁商品操作确认请求',
+    description: '执行租赁商品复制、下架、租期设置、规格查看或规格添加前的确认请求',
     risk: 'high',
     requiresConfirmation: true,
-    inputSchema: productIdArgumentsSchema,
+    inputSchema: rentalOperationArgumentsSchema,
   },
 ];
 

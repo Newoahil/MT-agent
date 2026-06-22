@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { parseAgentToolConfirmRequest } from '../agentRuntime/approvalCard.js';
+import type { AgentPlannerProvider } from '../agentRuntime/planner.js';
 import { replyFeishuMessageCard, replyFeishuMessageText, type FeishuAppSendResult, type FeishuCardPayload, type FeishuReplyConfig } from '../notify/feishuApp.js';
 import { handleOperationsLearningFeedback } from '../operationsLearningLoop/session.js';
 import { findLatestReportContext } from './reportStore.js';
 import { buildIdLookupCard } from './idLookupCard.js';
 import { lookupProductId } from './idLookup.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
+import { executeAgentToolRequest } from './agentToolExecutor.js';
 import { createRentalPriceSkillClient, executeRentalOperationConfirmRequest, parseRentalOperationConfirmRequest, parseRentalPriceConfirmRequest, type RentalPriceSkillClient } from './rentalPrice.js';
 import type { LlmIntentProposalProvider } from './llmIntentProposal.js';
 import type { BotIntent, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage, FeishuMessageEvent } from './types.js';
@@ -25,6 +28,7 @@ export interface FeishuBotServerConfig {
   replyCard?: (config: FeishuReplyConfig, card: FeishuCardPayload) => Promise<FeishuAppSendResult>;
   rentalPriceClient?: RentalPriceSkillClient;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
+  agentPlannerProvider?: AgentPlannerProvider;
 }
 
 interface FeishuCardActionEvent {
@@ -161,6 +165,26 @@ async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: F
     return;
   }
 
+  if (actionName === 'agent_tool_confirm') {
+    const request = parseAgentToolConfirmRequest(value);
+    if (!request) {
+      await replyText(replyConfig, 'Agent 操作确认参数无效，请重新发起。');
+      return;
+    }
+    const response = await executeAgentToolRequest(request, config.outputDir ?? 'output', {
+      rentalPriceClient: config.rentalPriceClient,
+    });
+    if (response.card) await replyCard(replyConfig, response.card);
+    else await replyText(replyConfig, response.text);
+    return;
+  }
+
+  if (actionName === 'agent_tool_cancel') {
+    const toolName = readString(value?.toolName) ?? '未知工具';
+    await replyText(replyConfig, `已取消 Agent 操作：${toolName}`);
+    return;
+  }
+
   if (actionName === 'rental_price_confirm') {
     const request = parseRentalPriceConfirmRequest(value);
     if (!request) {
@@ -209,7 +233,15 @@ async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: F
 }
 
 export function startFeishuBotServer(config: FeishuBotServerConfig) {
-  const dispatcher = createFeishuMessageDispatcher({ outputDir: config.outputDir, botMentionOpenId: config.botMentionOpenId, botMentionName: config.botMentionName, handleIntent: config.handleIntent, rentalPriceClient: config.rentalPriceClient, llmIntentProposalProvider: config.llmIntentProposalProvider });
+  const dispatcher = createFeishuMessageDispatcher({
+    outputDir: config.outputDir,
+    botMentionOpenId: config.botMentionOpenId,
+    botMentionName: config.botMentionName,
+    handleIntent: config.handleIntent,
+    rentalPriceClient: config.rentalPriceClient,
+    llmIntentProposalProvider: config.llmIntentProposalProvider,
+    agentPlannerProvider: config.agentPlannerProvider,
+  });
   const dispatchMessage = config.dispatchMessage ?? dispatcher.dispatch;
 
   const server = createServer(async (req, res) => {

@@ -1,5 +1,19 @@
 import { decideAgentPolicy, type AgentPolicyDecision } from './policy.js';
-import { findAgentTool } from './toolRegistry.js';
+import type { AgentToolDefinition } from './tool.js';
+import { findAgentTool, listAgentTools } from './toolRegistry.js';
+import type { AgentWorkflowDefinition } from './workflowRegistry.js';
+
+export type AgentPlannerToolMetadata = Pick<AgentToolDefinition, 'name' | 'description' | 'risk' | 'requiresConfirmation' | 'inputSchema'>;
+
+export interface AgentPlannerRequest {
+  message: string;
+  tools: AgentPlannerToolMetadata[];
+  workflows: AgentWorkflowDefinition[];
+}
+
+export interface AgentPlannerProvider {
+  proposePlan(request: AgentPlannerRequest): Promise<string>;
+}
 
 export interface AgentPlannerProposal {
   goal: string;
@@ -18,7 +32,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function schemaAllowsArguments(schema: unknown, value: Record<string, unknown>): boolean {
+export function schemaAllowsArguments(schema: unknown, value: Record<string, unknown>): boolean {
   if (!isRecord(schema)) return true;
   if (schema.type !== undefined && schema.type !== 'object') return false;
 
@@ -38,6 +52,21 @@ function schemaAllowsArguments(schema: unknown, value: Record<string, unknown>):
   }
 
   return true;
+}
+
+export function listAgentPlannerTools(): AgentPlannerToolMetadata[] {
+  return listAgentTools().map(({ name, description, risk, requiresConfirmation, inputSchema }) => ({
+    name,
+    description,
+    risk,
+    requiresConfirmation,
+    inputSchema,
+  }));
+}
+
+export function validateAgentToolArguments(toolName: string, value: Record<string, unknown>): boolean {
+  const tool = findAgentTool(toolName);
+  return Boolean(tool && schemaAllowsArguments(tool.inputSchema, value));
 }
 
 export function validateAgentPlannerProposal(raw: string): AgentPlannerValidationResult {

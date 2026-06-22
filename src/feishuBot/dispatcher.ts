@@ -6,6 +6,7 @@ import type { LlmToolSelectionProvider } from './llmProvider.js';
 import type { LlmIntentProposalProvider } from './llmIntentProposal.js';
 import type { RentalPriceSkillClient } from './rentalPrice.js';
 import type { BotIntent, BotIntentResolver, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage } from './types.js';
+import type { AgentPlannerProvider } from '../agentRuntime/planner.js';
 
 export interface FeishuMessageDispatcherConfig {
   outputDir?: string;
@@ -16,6 +17,7 @@ export interface FeishuMessageDispatcherConfig {
   handleIntent?: (intent: BotIntent, outputDir?: string) => Promise<BotResponse>;
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
+  agentPlannerProvider?: AgentPlannerProvider;
   rentalPriceClient?: RentalPriceSkillClient;
   logError?: (error: unknown, message: FeishuBotIncomingTextMessage) => void;
 }
@@ -132,7 +134,12 @@ function toBotResponse(response: AgentResponse): BotResponse {
 
 export function createFeishuMessageDispatcher(config: FeishuMessageDispatcherConfig = {}): FeishuMessageDispatcher {
   const resolveIntent = config.resolveIntent ?? ((text: string) => parseBotIntent(text));
-  const handleIntent = config.handleIntent ?? ((intent, outputDir) => handleBotIntent(intent, outputDir, { llmToolSelector: config.llmToolSelector, llmIntentProposalProvider: config.llmIntentProposalProvider, rentalPriceClient: config.rentalPriceClient }));
+  const handleIntent = config.handleIntent ?? ((intent, outputDir) => handleBotIntent(intent, outputDir, {
+    llmToolSelector: config.llmToolSelector,
+    llmIntentProposalProvider: config.llmIntentProposalProvider,
+    agentPlannerProvider: config.agentPlannerProvider,
+    rentalPriceClient: config.rentalPriceClient,
+  }));
   const logError = config.logError ?? ((error, message) => console.error(`飞书消息处理失败 ${message.messageId}:`, error));
 
   return {
@@ -149,6 +156,7 @@ export function createFeishuMessageDispatcher(config: FeishuMessageDispatcherCon
           handleIntent,
           llmToolSelector: config.llmToolSelector,
           llmIntentProposalProvider: config.llmIntentProposalProvider,
+          agentPlannerProvider: config.agentPlannerProvider,
           rentalPriceClient: config.rentalPriceClient,
         });
         const response = toBotResponse(await runtime.handle(toAgentRequest(message, text)));

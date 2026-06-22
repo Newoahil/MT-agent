@@ -1,8 +1,11 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { createHash } from 'node:crypto';
+import { parseAgentToolConfirmRequest } from '../agentRuntime/approvalCard.js';
+import type { AgentPlannerProvider } from '../agentRuntime/planner.js';
 import { handleOperationsLearningFeedback } from '../operationsLearningLoop/session.js';
 import { findLatestReportContext } from './reportStore.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
+import { executeAgentToolRequest } from './agentToolExecutor.js';
 import { buildIdLookupCard } from './idLookupCard.js';
 import { lookupProductId } from './idLookup.js';
 import { createRentalPriceSkillClient, executeRentalOperationConfirmRequest, parseRentalOperationConfirmRequest, parseRentalPriceConfirmRequest, type RentalPriceSkillClient } from './rentalPrice.js';
@@ -96,6 +99,7 @@ export interface FeishuSdkBotConfig {
   outputDir?: string;
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
+  agentPlannerProvider?: AgentPlannerProvider;
   dispatchMessage?: (message: FeishuBotIncomingTextMessage) => Promise<FeishuBotDispatchResult>;
   logError?: (error: unknown, context: { messageId: string; phase: 'reply' | 'dispatch' }) => void;
   rentalPriceClient?: RentalPriceSkillClient;
@@ -263,7 +267,15 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
   const client = new sdk.Client({ appId: config.appId, appSecret: config.appSecret });
   const wsClient = new sdk.WSClient({ appId: config.appId, appSecret: config.appSecret });
   const eventDispatcher = new sdk.EventDispatcher({});
-  const dispatchMessage = config.dispatchMessage ?? createFeishuMessageDispatcher({ outputDir: config.outputDir, botMentionOpenId: config.botMentionOpenId, botMentionName: config.botMentionName, llmToolSelector: config.llmToolSelector, llmIntentProposalProvider: config.llmIntentProposalProvider, rentalPriceClient: config.rentalPriceClient }).dispatch;
+  const dispatchMessage = config.dispatchMessage ?? createFeishuMessageDispatcher({
+    outputDir: config.outputDir,
+    botMentionOpenId: config.botMentionOpenId,
+    botMentionName: config.botMentionName,
+    llmToolSelector: config.llmToolSelector,
+    llmIntentProposalProvider: config.llmIntentProposalProvider,
+    agentPlannerProvider: config.agentPlannerProvider,
+    rentalPriceClient: config.rentalPriceClient,
+  }).dispatch;
   const logError = config.logError ?? ((error: unknown, context: { messageId: string; phase: 'reply' | 'dispatch' }) => console.error(`飞书SDK消息处理失败 ${context.phase} ${context.messageId}:`, error));
   const rentalPriceClient = config.rentalPriceClient ?? createRentalPriceSkillClient();
 
@@ -308,6 +320,48 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
           });
           if (response.card) await replyCard(client, messageId, response.card);
           else await replyText(client, messageId, response.text);
+          return;
+        }
+
+        if (actionName === 'agent_tool_confirm') {
+          const request = parseAgentToolConfirmRequest(value);
+          if (!request) {
+            await replyText(client, messageId, 'Agent 操作确认参数无效，请重新发起。');
+            return;
+          }
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          void (async () => {
+            await updateCard(client, messageId, statusCard('Agent 操作处理中', `工具 ${request.toolName} 已收到确认，正在执行。`, 'blue')).catch(() => false);
+            try {
+              const response = await executeAgentToolRequest(request, config.outputDir ?? 'output', { rentalPriceClient });
+              setRentalActionStatus(claim.key, 'completed');
+              if (response.card) {
+                await updateCard(client, messageId, response.card).catch(() => false);
+              } else {
+                await updateCard(client, messageId, statusCard('Agent 操作已完成', response.text, 'green')).catch(() => false);
+              }
+            } catch (error) {
+              setRentalActionStatus(claim.key, 'failed');
+              await updateCard(client, messageId, statusCard('Agent 操作失败', `${request.toolName}\n${error instanceof Error ? error.message : String(error)}`, 'red')).catch(() => false);
+              logError(error, { messageId, phase: 'reply' });
+            }
+          })();
+          return;
+        }
+
+        if (actionName === 'agent_tool_cancel') {
+          const toolName = readString(value?.toolName) ?? '未知工具';
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          setRentalActionStatus(claim.key, 'cancelled');
+          await updateCard(client, messageId, statusCard('Agent 操作已取消', `工具 ${toolName} 操作已取消。`, 'grey')).catch(() => false);
           return;
         }
 
