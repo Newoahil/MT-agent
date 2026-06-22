@@ -7,7 +7,7 @@ import { createRentalPriceSkillClient, parseRentalOperationConfirmRequest, parse
 
 function fakeSdk(sent: unknown[], registered: Record<string, (data: unknown) => Promise<void>>) {
   class FakeClient {
-    im = { v1: { message: { reply: async (request: unknown) => sent.push(request) } } };
+    im = { v1: { message: { reply: async (request: unknown) => sent.push({ kind: 'reply', request }), patch: async (request: unknown) => sent.push({ kind: 'patch', request }) } } };
   }
   class FakeWSClient { start() { return undefined; } }
   class FakeEventDispatcher {
@@ -17,6 +17,15 @@ function fakeSdk(sent: unknown[], registered: Record<string, (data: unknown) => 
     }
   }
   return { Client: FakeClient, WSClient: FakeWSClient, EventDispatcher: FakeEventDispatcher };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
 }
 
 describe('rental price card action', () => {
@@ -58,10 +67,10 @@ describe('rental price card action', () => {
       },
     });
 
+    await waitFor(() => executions.length === 1 && sent.some((item) => JSON.stringify(item).includes('改价执行成功')));
     expect(executions).toEqual([{ mode: 'explicit_fields', productId: '761', fields: { rent1day: '22.00' } }]);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ path: { message_id: 'om-rental-confirm' }, data: { msg_type: 'text' } });
-    expect(JSON.stringify(sent[0])).toContain('改价执行成功');
+    expect(sent.some((item) => JSON.stringify(item).includes('租赁商品改价处理中'))).toBe(true);
+    expect(sent.some((item) => JSON.stringify(item).includes('改价执行成功'))).toBe(true);
   });
 
   it('rejects forged confirmation fields before execution', () => {
@@ -95,9 +104,54 @@ describe('rental price card action', () => {
       },
     });
 
+    await waitFor(() => calls.length === 1 && sent.some((item) => JSON.stringify(item).includes('下架成功：商品 761')));
     expect(calls).toEqual(['delist:761']);
-    expect(sent).toHaveLength(1);
-    expect(JSON.stringify(sent[0])).toContain('下架成功：商品 761');
+    expect(sent.some((item) => JSON.stringify(item).includes('租赁商品操作处理中'))).toBe(true);
+    expect(sent.some((item) => JSON.stringify(item).includes('下架成功：商品 761'))).toBe(true);
+  });
+
+  it('does not execute a rental operation more than once when the same card is clicked repeatedly', async () => {
+    let releaseCopy: (() => void) | undefined;
+    const calls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run during operation confirmation'); },
+      async execute() { throw new Error('price execute should not run during operation confirmation'); },
+      async copy(productId) {
+        calls.push(`copy:${productId}`);
+        await new Promise<void>((resolve) => {
+          releaseCopy = resolve;
+        });
+        return { productId, ok: true, newProductId: '999', lines: ['copy: ok'] };
+      },
+      async delist() { throw new Error('delist should not run for copy confirmation'); },
+      async tenancySet() { throw new Error('tenancySet should not run for copy confirmation'); },
+      async specDiscover() { throw new Error('specDiscover should not run for copy confirmation'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run for copy confirmation'); },
+    };
+    const registered: Record<string, (data: unknown) => Promise<void>> = {};
+    const sent: unknown[] = [];
+    const bot = createFeishuSdkBot({ appId: 'app', appSecret: 'secret', sdk: fakeSdk(sent, registered), rentalPriceClient });
+    const callback = {
+      event: {
+        context: { open_message_id: 'om-rental-copy-confirm' },
+        action: { value: { action: 'rental_operation_confirm', request: { action: 'copy', productId: '875' } } },
+      },
+    };
+
+    bot.start();
+    await registered['card.action.trigger'](callback);
+    await waitFor(() => calls.length === 1);
+    await registered['card.action.trigger'](callback);
+
+    expect(calls).toEqual(['copy:875']);
+    expect(sent.some((item) => JSON.stringify(item).includes('已经在执行中'))).toBe(true);
+
+    releaseCopy?.();
+    await waitFor(() => sent.some((item) => JSON.stringify(item).includes('复制成功')));
+    await registered['card.action.trigger'](callback);
+
+    expect(calls).toEqual(['copy:875']);
+    expect(sent.some((item) => JSON.stringify(item).includes('已经执行完成'))).toBe(true);
   });
 
   it('rejects forged rental operation confirmations', () => {

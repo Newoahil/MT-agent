@@ -1,4 +1,5 @@
 import * as lark from '@larksuiteoapi/node-sdk';
+import { createHash } from 'node:crypto';
 import { handleOperationsLearningFeedback } from '../operationsLearningLoop/session.js';
 import { findLatestReportContext } from './reportStore.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
@@ -58,6 +59,14 @@ interface FeishuSdkPatchRequest {
 
 interface FeishuSdkClient {
   im: { v1: { message: { reply(request: FeishuSdkReplyRequest): Promise<unknown> | unknown; patch?: (request: FeishuSdkPatchRequest) => Promise<unknown> | unknown } } };
+}
+
+type RentalActionStatus = 'processing' | 'completed' | 'failed' | 'cancelled';
+
+interface RentalActionClaim {
+  status: RentalActionStatus;
+  actionName: string;
+  messageId: string;
 }
 
 interface FeishuSdkEventDispatcher {
@@ -156,6 +165,41 @@ function cardActionValue(data: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
+const rentalActionClaims = new Map<string, RentalActionClaim>();
+
+function stableActionKey(messageId: string, actionName: string, value: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify({ messageId, actionName, request: value.request ?? value })).digest('hex');
+}
+
+function claimRentalAction(messageId: string, actionName: string, value: Record<string, unknown>): { claimed: true; key: string } | { claimed: false; claim: RentalActionClaim } {
+  const key = stableActionKey(messageId, actionName, value);
+  const existing = rentalActionClaims.get(key);
+  if (existing) return { claimed: false, claim: existing };
+  rentalActionClaims.set(key, { status: 'processing', actionName, messageId });
+  return { claimed: true, key };
+}
+
+function setRentalActionStatus(key: string, status: RentalActionStatus): void {
+  const claim = rentalActionClaims.get(key);
+  if (claim) claim.status = status;
+}
+
+function duplicateRentalActionText(claim: RentalActionClaim): string {
+  if (claim.status === 'processing') return '该确认卡片已经在执行中，请勿重复点击。';
+  if (claim.status === 'completed') return '该确认卡片已经执行完成，请勿重复点击。';
+  if (claim.status === 'cancelled') return '该确认卡片已经取消，请勿重复点击。';
+  return '该确认卡片已经处理过，请重新发起命令。';
+}
+
+function statusCard(title: string, content: string, template: 'blue' | 'green' | 'red' | 'grey' = 'blue'): FeishuCardPayload {
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: { title: { tag: 'plain_text', content: title }, template },
+    body: { elements: [{ tag: 'markdown', content }] },
+  };
+}
+
 async function replyText(client: FeishuSdkClient, messageId: string, text: string): Promise<void> {
   await client.im.v1.message.reply({
     path: { message_id: messageId },
@@ -234,7 +278,7 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
       const action = extractCardAction(data);
       const value = cardActionValue(data);
       const actionName = readString(value?.action);
-      if (!messageId || !actionName) return;
+      if (!messageId || !actionName || !value) return;
 
       try {
         if (actionName === 'operations_learning_feedback') {
@@ -264,13 +308,36 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
             await replyText(client, messageId, '改价确认参数无效，请重新发起改价。');
             return;
           }
-          const result = await rentalPriceClient.execute(request);
-          await replyText(client, messageId, `${result.ok ? '改价执行成功' : '改价执行失败'}：商品 ${result.productId}\n${result.lines.join('\n')}`);
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          void (async () => {
+            await updateCard(client, messageId, statusCard('租赁商品改价处理中', `商品 ${request.productId} 改价已收到确认，正在执行。`, 'blue')).catch(() => false);
+            try {
+              const result = await rentalPriceClient.execute(request);
+              setRentalActionStatus(claim.key, result.ok ? 'completed' : 'failed');
+              await updateCard(client, messageId, statusCard(result.ok ? '租赁商品改价已完成' : '租赁商品改价失败', `商品 ${result.productId}\n${result.lines.join('\n')}`, result.ok ? 'green' : 'red')).catch(() => false);
+              await replyText(client, messageId, `${result.ok ? '改价执行成功' : '改价执行失败'}：商品 ${result.productId}\n${result.lines.join('\n')}`);
+            } catch (error) {
+              setRentalActionStatus(claim.key, 'failed');
+              await updateCard(client, messageId, statusCard('租赁商品改价失败', `商品 ${request.productId}\n${error instanceof Error ? error.message : String(error)}`, 'red')).catch(() => false);
+              logError(error, { messageId, phase: 'reply' });
+            }
+          })();
           return;
         }
 
         if (actionName === 'rental_price_cancel') {
           const productId = readString(value?.productId) ?? '未知';
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          setRentalActionStatus(claim.key, 'cancelled');
+          await updateCard(client, messageId, statusCard('租赁商品改价已取消', `商品 ${productId} 改价已取消。`, 'grey')).catch(() => false);
           await replyText(client, messageId, `已取消改价：商品 ${productId}`);
           return;
         }
@@ -281,13 +348,36 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
             await replyText(client, messageId, '租赁商品操作确认参数无效，请重新发起。');
             return;
           }
-          const result = await executeRentalOperationConfirmRequest(rentalPriceClient, request);
-          await replyText(client, messageId, result.text);
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          void (async () => {
+            await updateCard(client, messageId, statusCard('租赁商品操作处理中', `商品 ${request.productId} 操作已收到确认，正在执行。`, 'blue')).catch(() => false);
+            try {
+              const result = await executeRentalOperationConfirmRequest(rentalPriceClient, request);
+              setRentalActionStatus(claim.key, result.ok ? 'completed' : 'failed');
+              await updateCard(client, messageId, statusCard(result.ok ? '租赁商品操作已完成' : '租赁商品操作失败', result.text, result.ok ? 'green' : 'red')).catch(() => false);
+              await replyText(client, messageId, result.text);
+            } catch (error) {
+              setRentalActionStatus(claim.key, 'failed');
+              await updateCard(client, messageId, statusCard('租赁商品操作失败', `商品 ${request.productId}\n${error instanceof Error ? error.message : String(error)}`, 'red')).catch(() => false);
+              logError(error, { messageId, phase: 'reply' });
+            }
+          })();
           return;
         }
 
         if (actionName === 'rental_operation_cancel') {
           const productId = readString(value?.productId) ?? '未知';
+          const claim = claimRentalAction(messageId, actionName, value);
+          if (!claim.claimed) {
+            await replyText(client, messageId, duplicateRentalActionText(claim.claim));
+            return;
+          }
+          setRentalActionStatus(claim.key, 'cancelled');
+          await updateCard(client, messageId, statusCard('租赁商品操作已取消', `商品 ${productId} 操作已取消。`, 'grey')).catch(() => false);
           await replyText(client, messageId, `已取消租赁商品操作：商品 ${productId}`);
           return;
         }
