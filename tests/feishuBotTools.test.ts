@@ -631,6 +631,26 @@ describe('handleBotIntent', () => {
     expect(response.text).not.toContain('端内ID 372');
   });
 
+  it('routes deterministic best same-sku questions before the generic agent planner', async () => {
+    const outputDir = await writeContext();
+    const registryRoot = await mkdtemp(join(tmpdir(), 'mt-agent-ranking-registry-'));
+    const registryPaths = await writeRankingRegistryFixtures(registryRoot, outputDir);
+    const planner: AgentPlannerProvider = {
+      async proposePlan() {
+        throw new Error('generic planner should not run for deterministic best-link questions');
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '数据最好的 pocket3 的端内id是多少' }, outputDir, {
+      agentPlannerProvider: planner,
+      closedOrderRegistryPaths: registryPaths,
+    });
+
+    expect(response.text).toContain('端内ID 702');
+    expect(response.text).toContain('同款组 dji-pocket-3');
+    expect(response.text).not.toContain('端内ID 701\n1日');
+  });
+
   it('uses the generic agent planner to run safe registered tools', async () => {
     const outputDir = await writeContext();
     const planner: AgentPlannerProvider = {

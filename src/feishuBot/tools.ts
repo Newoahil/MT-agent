@@ -344,13 +344,21 @@ export async function handleBotIntent(intent: BotIntent, outputDir = 'output', o
       }
     }
 
+    const deterministicDataIntent = parseAgentDataIntent(intent.text);
+    if (deterministicDataIntent.type === 'best_product_by_same_sku') {
+      const tool = findReadOnlyTool(deterministicDataIntent);
+      const latest = await findLatestReportContext(outputDir);
+      if (tool && latest) return tool.run(latest.context, deterministicDataIntent, await buildReadOnlyToolRunOptions(options, true));
+      if (tool) return { text: '还没有找到公域日报上下文。' };
+    }
+
     const plannedResponse = await agentPlannerResponse(intent.text, outputDir, options);
     if (plannedResponse) return plannedResponse;
     if (looksLikeNewLinkWriteIntent(intent.text)) {
       return { text: options.agentPlannerProvider ? NEW_LINK_WRITE_INTENT_PLAN_FAILED : NEW_LINK_WRITE_INTENT_NEEDS_LLM };
     }
 
-    const dataIntent = parseAgentDataIntent(intent.text);
+    const dataIntent = deterministicDataIntent;
     const tool = findReadOnlyTool(dataIntent);
     const latest = await findLatestReportContext(outputDir);
     if (tool && latest) return tool.run(latest.context, dataIntent, await buildReadOnlyToolRunOptions(options, readOnlyIntentNeedsLinkRegistry(dataIntent)));
