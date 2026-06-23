@@ -31,12 +31,12 @@ describe('differential pricing discount filling', () => {
     expect(plan.unrecognizedMaxValues).toEqual(['7.7']);
   });
 
-  it('keeps the pre-submit batch guard at twenty selected products', () => {
+  it('keeps the pre-submit batch guard at ten selected products', () => {
     const snapshots = Array.from({ length: MAX_DIFFERENTIAL_PRICING_BATCH_PRODUCTS * 4 + 4 }, () => ({ value: '', ariaValueMax: '8.5' }));
 
     const plan = planDifferentialPricingDiscountFills(snapshots);
 
-    expect(MAX_DIFFERENTIAL_PRICING_BATCH_PRODUCTS).toBe(20);
+    expect(MAX_DIFFERENTIAL_PRICING_BATCH_PRODUCTS).toBe(10);
     expect(plan.exceedsBatchLimit).toBe(true);
   });
 

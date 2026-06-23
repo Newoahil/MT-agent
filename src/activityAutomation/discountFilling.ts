@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import type { DifferentialPricingDiscountValues } from './differentialPricing.js';
 
-export const MAX_DIFFERENTIAL_PRICING_BATCH_PRODUCTS = 20;
+export const MAX_DIFFERENTIAL_PRICING_BATCH_PRODUCTS = 10;
 
 export type DifferentialPricingDiscountLevel = 'SS' | 'S' | 'A' | 'B';
 

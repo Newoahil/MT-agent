@@ -45,6 +45,18 @@ function textInput(name: string, label: string, options: { defaultValue?: string
   return input;
 }
 
+function datePicker(name: string, label: string, options: { defaultValue?: string; placeholder: string }): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    tag: 'date_picker',
+    name,
+    label: { tag: 'plain_text', content: label },
+    label_position: 'top',
+    placeholder: { tag: 'plain_text', content: options.placeholder },
+  };
+  if (options.defaultValue !== undefined) input.initial_date = options.defaultValue;
+  return input;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -75,11 +87,11 @@ export function buildActivityAutomationCard(defaults: Partial<ActivityAutomation
           tag: 'form',
           name: 'differential_pricing_form',
           elements: [
-            textInput('starts_at', '开始日期', {
+            datePicker('starts_at', '开始日期', {
               defaultValue: defaults.startsAt,
               placeholder: 'YYYY-MM-DD',
             }),
-            textInput('ends_at', '结束日期', {
+            datePicker('ends_at', '结束日期', {
               defaultValue: defaults.endsAt,
               placeholder: 'YYYY-MM-DD',
             }),

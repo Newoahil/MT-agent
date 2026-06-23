@@ -11,7 +11,7 @@ const CANCEL_BUTTON_PATTERN = pattern('\\u53d6\\s*\\u6d88');
 const CONFIRM_BUTTON_PATTERN = pattern('\\u786e\\s*\\u5b9a');
 const MERCHANT_PRODUCT_ID_PATTERN = pattern('(?:\\u5546\\u5bb6)?([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)');
 
-export const MAX_DIFFERENTIAL_PRICING_PICK_PRODUCTS = 20;
+export const MAX_DIFFERENTIAL_PRICING_PICK_PRODUCTS = 10;
 
 export interface ProductPickerCheckboxSnapshot {
   platformProductId: string;
@@ -245,6 +245,19 @@ async function goNextModalPage(page: Page): Promise<boolean> {
   );
 }
 
+function snapshotSignature(snapshots: ProductPickerCheckboxSnapshot[]): string {
+  return snapshots.map((snapshot) => snapshot.platformProductId).filter(Boolean).join('|');
+}
+
+async function waitForNextModalPage(page: Page, previousSignature: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await page.waitForTimeout(300);
+    const nextSignature = snapshotSignature(await checkboxSnapshots(page));
+    if (nextSignature && nextSignature !== previousSignature) return true;
+  }
+  return false;
+}
+
 export async function pickDifferentialPricingProducts(page: Page): Promise<DifferentialPricingProductPickResult> {
   await ensureAddProductModal(page);
 
@@ -254,7 +267,7 @@ export async function pickDifferentialPricingProducts(page: Page): Promise<Diffe
   while (selectedCount < MAX_DIFFERENTIAL_PRICING_PICK_PRODUCTS) {
     pagesVisited += 1;
     const snapshots = await checkboxSnapshots(page);
-    const pageSignature = snapshots.map((snapshot) => snapshot.platformProductId).filter(Boolean).join('|');
+    const pageSignature = snapshotSignature(snapshots);
     if (pageSignature && seenPageSignatures.has(pageSignature)) break;
     if (pageSignature) seenPageSignatures.add(pageSignature);
 
@@ -270,7 +283,9 @@ export async function pickDifferentialPricingProducts(page: Page): Promise<Diffe
     if (pickedOnCurrentPage.length > 0) {
       selectedCount = rememberPickedProducts(page, pickedOnCurrentPage).length;
     }
-    if (!plan.shouldContinuePaging || !(await goNextModalPage(page))) break;
+    if (!plan.shouldContinuePaging) break;
+    if (!(await goNextModalPage(page))) break;
+    if (!(await waitForNextModalPage(page, pageSignature))) break;
   }
 
   if (selectedCount > 0) {
