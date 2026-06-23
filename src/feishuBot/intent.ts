@@ -25,7 +25,7 @@ export function parseExactBotIntent(input: string): BotIntent {
   if (!text) return { type: 'help' };
   if (/^(帮助|help|\/help)$/i.test(text)) return { type: 'help' };
   if (/^(跑|生成|执行).*(公域)?日报/.test(text)) return { type: 'run_public_traffic_report', sendTo: sendTo(text) };
-  if (/^推送(日报|公域日报)到群$/.test(text)) return { type: 'push_latest_report_to_group' };
+  if (/^(推送)?(公域)?日报到群$/.test(text)) return { type: 'push_latest_report_to_group' };
   if (/^重发.*(公域)?日报/.test(text)) return { type: 'resend_latest_report', sendTo: sendTo(text) };
   if (/^(同步|拉取|更新).*(关单|关单反馈)/.test(text)) return { type: 'sync_closed_order_feedback' };
   if (/^(跑|生成|执行).*(关单观察|关单报告|关单反馈观察)/.test(text)) return { type: 'run_closed_order_observation_report' };
@@ -33,6 +33,7 @@ export function parseExactBotIntent(input: string): BotIntent {
   if (/^(运营学习|学习反馈).*(历史|统计)$/.test(text)) return { type: 'operations_learning_history' };
   if (/^(运营学习|学习反馈).*(汇总|总结)$/.test(text)) return { type: 'operations_learning_summary' };
   if (/^(运营学习|学习测验|今日测验|loop测验|运营测验|测验)$|学习\s*loop|运营学习\s*loop/i.test(text)) return { type: 'operations_learning_quiz' };
+  if (/^(差异化定价|配置差异化定价)$/.test(text)) return { type: 'differential_pricing_card' };
   if (/^(?:商品)?ID(?:查询|互查|转换|换算)$|^打开(?:商品)?ID(?:查询|互查|转换|换算)$|^查ID$/i.test(text)) return { type: 'lookup_product_id_card' };
 
   const rentalPriceChange = parseRentalPriceChange(text);
@@ -60,7 +61,7 @@ export function parseExactBotIntent(input: string): BotIntent {
     ?? /^(20\d{18,})\s*的端内ID$/.exec(text);
   if (idLookup) return { type: 'lookup_product_id', query: idLookup[1].trim() };
 
-  const query = /^(?:查询商品|查商品|查询|商品)\s+(.+)$/.exec(text)
+  const query = /^(?:查询商品|查商品查询|商品)\s+(.+)$/.exec(text)
     ?? /^这个商品\s+(.+?)\s*(?:数据如何|怎么样|如何)?$/.exec(text);
   if (query) return { type: 'query_product', keyword: query[1].trim() };
 

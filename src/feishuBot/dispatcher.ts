@@ -5,6 +5,7 @@ import { handleBotIntent } from './tools.js';
 import type { LlmToolSelectionProvider } from './llmProvider.js';
 import type { LlmIntentProposalProvider } from './llmIntentProposal.js';
 import type { RentalPriceSkillClient } from './rentalPrice.js';
+import type { ActivityAutomationSkillClient } from './activityAutomation.js';
 import type { BotIntent, BotIntentResolver, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage } from './types.js';
 
 export interface FeishuMessageDispatcherConfig {
@@ -17,6 +18,7 @@ export interface FeishuMessageDispatcherConfig {
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
   rentalPriceClient?: RentalPriceSkillClient;
+  activityAutomationClient?: ActivityAutomationSkillClient;
   logError?: (error: unknown, message: FeishuBotIncomingTextMessage) => void;
 }
 
@@ -74,6 +76,7 @@ function textWithoutMentionKeys(message: FeishuBotIncomingTextMessage, config: F
 function canonicalizeIntent(intent: BotIntent): BotIntent {
   switch (intent.type) {
     case 'help':
+    case 'differential_pricing_card':
     case 'latest_summary':
     case 'operations_learning_quiz':
     case 'operations_learning_summary':
@@ -132,7 +135,12 @@ function toBotResponse(response: AgentResponse): BotResponse {
 
 export function createFeishuMessageDispatcher(config: FeishuMessageDispatcherConfig = {}): FeishuMessageDispatcher {
   const resolveIntent = config.resolveIntent ?? ((text: string) => parseBotIntent(text));
-  const handleIntent = config.handleIntent ?? ((intent, outputDir) => handleBotIntent(intent, outputDir, { llmToolSelector: config.llmToolSelector, llmIntentProposalProvider: config.llmIntentProposalProvider, rentalPriceClient: config.rentalPriceClient }));
+  const handleIntent = config.handleIntent ?? ((intent, outputDir) => handleBotIntent(intent, outputDir, {
+    llmToolSelector: config.llmToolSelector,
+    llmIntentProposalProvider: config.llmIntentProposalProvider,
+    rentalPriceClient: config.rentalPriceClient,
+    activityAutomationClient: config.activityAutomationClient,
+  }));
   const logError = config.logError ?? ((error, message) => console.error(`飞书消息处理失败 ${message.messageId}:`, error));
 
   return {
@@ -150,6 +158,7 @@ export function createFeishuMessageDispatcher(config: FeishuMessageDispatcherCon
           llmToolSelector: config.llmToolSelector,
           llmIntentProposalProvider: config.llmIntentProposalProvider,
           rentalPriceClient: config.rentalPriceClient,
+          activityAutomationClient: config.activityAutomationClient,
         });
         const response = toBotResponse(await runtime.handle(toAgentRequest(message, text)));
         return { ...response, skipped: false };

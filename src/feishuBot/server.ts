@@ -5,6 +5,12 @@ import { findLatestReportContext } from './reportStore.js';
 import { buildIdLookupCard } from './idLookupCard.js';
 import { lookupProductId } from './idLookup.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
+import {
+  createActivityAutomationSkillClient,
+  formatActivityAutomationExecutionResult,
+  parseActivityAutomationConfirmRequest,
+  type ActivityAutomationSkillClient,
+} from './activityAutomation.js';
 import { createRentalPriceSkillClient, executeRentalOperationConfirmRequest, parseRentalOperationConfirmRequest, parseRentalPriceConfirmRequest, type RentalPriceSkillClient } from './rentalPrice.js';
 import type { LlmIntentProposalProvider } from './llmIntentProposal.js';
 import type { BotIntent, BotResponse, FeishuBotDispatchResult, FeishuBotIncomingTextMessage, FeishuMessageEvent } from './types.js';
@@ -24,6 +30,7 @@ export interface FeishuBotServerConfig {
   replyText?: (config: FeishuReplyConfig, text: string) => Promise<FeishuAppSendResult>;
   replyCard?: (config: FeishuReplyConfig, card: FeishuCardPayload) => Promise<FeishuAppSendResult>;
   rentalPriceClient?: RentalPriceSkillClient;
+  activityAutomationClient?: ActivityAutomationSkillClient;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
 }
 
@@ -115,6 +122,16 @@ function readActionFormValue(action: FeishuCardAction | undefined, name: string)
   return readString(action.input_value);
 }
 
+function readActionForm(action: FeishuCardAction | undefined): Record<string, unknown> | undefined {
+  if (!isRecord(action)) return undefined;
+  const actionRecord = action as Record<string, unknown>;
+  for (const key of ['form_value', 'formValue']) {
+    const formValue = actionRecord[key];
+    if (isRecord(formValue)) return formValue;
+  }
+  return undefined;
+}
+
 function extractCardMessageId(payload: FeishuCardActionEvent): string | undefined {
   return readString(payload.event?.context?.open_message_id) ?? readString(payload.event?.open_message_id);
 }
@@ -172,6 +189,17 @@ async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: F
     return;
   }
 
+  if (actionName === 'activity_automation_confirm') {
+    const request = parseActivityAutomationConfirmRequest(readActionForm(payload.event?.action));
+    if (!request) {
+      await replyText(replyConfig, '差异化定价参数无效，请重新填写卡片后再试。');
+      return;
+    }
+    const result = await (config.activityAutomationClient ?? createActivityAutomationSkillClient()).execute(request);
+    await replyText(replyConfig, formatActivityAutomationExecutionResult(result));
+    return;
+  }
+
   if (actionName === 'rental_price_cancel') {
     const productId = readString(value?.productId) ?? '未知';
     await replyText(replyConfig, `已取消改价：商品 ${productId}`);
@@ -209,7 +237,15 @@ async function handleCardActionTrigger(payload: FeishuCardActionEvent, config: F
 }
 
 export function startFeishuBotServer(config: FeishuBotServerConfig) {
-  const dispatcher = createFeishuMessageDispatcher({ outputDir: config.outputDir, botMentionOpenId: config.botMentionOpenId, botMentionName: config.botMentionName, handleIntent: config.handleIntent, rentalPriceClient: config.rentalPriceClient, llmIntentProposalProvider: config.llmIntentProposalProvider });
+  const dispatcher = createFeishuMessageDispatcher({
+    outputDir: config.outputDir,
+    botMentionOpenId: config.botMentionOpenId,
+    botMentionName: config.botMentionName,
+    handleIntent: config.handleIntent,
+    rentalPriceClient: config.rentalPriceClient,
+    activityAutomationClient: config.activityAutomationClient,
+    llmIntentProposalProvider: config.llmIntentProposalProvider,
+  });
   const dispatchMessage = config.dispatchMessage ?? dispatcher.dispatch;
 
   const server = createServer(async (req, res) => {

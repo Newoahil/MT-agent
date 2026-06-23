@@ -10,6 +10,10 @@ import { startOperationsLearningSession, summarizeOperationsLearningHistory, sum
 import { buildPublicTrafficCard } from '../publicTraffic/buildPublicTrafficCard.js';
 import { buildPublicTrafficFeishuText } from '../publicTraffic/buildPublicTrafficFeishu.js';
 import { buildClosedOrderObservationCard } from './closedOrderObservationCard.js';
+import {
+  buildActivityAutomationCard,
+  type ActivityAutomationSkillClient,
+} from './activityAutomation.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
 import { buildIdLookupCard } from './idLookupCard.js';
 import { getSupportedLlmIntentProposals, parseLlmIntentProposal, type LlmIntentProposalProvider } from './llmIntentProposal.js';
@@ -67,6 +71,7 @@ export interface HandleBotIntentOptions {
   llmToolSelector?: LlmToolSelectionProvider;
   llmIntentProposalProvider?: LlmIntentProposalProvider;
   rentalPriceClient?: RentalPriceSkillClient;
+  activityAutomationClient?: ActivityAutomationSkillClient;
   closedOrderFetchImpl?: typeof fetch;
   closedOrderRegistryPaths?: ClosedOrderRegistryPathsInput;
 }
@@ -120,6 +125,13 @@ function formatClosedOrderObservationSummary(
 export async function handleBotIntent(intent: BotIntent, outputDir = 'output', options: HandleBotIntentOptions = {}): Promise<BotResponse> {
   if (intent.type === 'help') {
     return { text: HELP_TEXT };
+  }
+
+  if (intent.type === 'differential_pricing_card') {
+    return {
+      text: '差异化定价卡片已打开，请在卡片中填写日期和折扣后确认执行。',
+      card: buildActivityAutomationCard(),
+    };
   }
 
   if (intent.type === 'sync_closed_order_feedback') {
