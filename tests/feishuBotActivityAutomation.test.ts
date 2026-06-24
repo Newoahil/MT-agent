@@ -82,6 +82,8 @@ describe('differential pricing Feishu integration', () => {
     expect(JSON.stringify(card)).toContain('activity_price_callback_confirm');
     expect(JSON.stringify(card)).toContain('770');
     expect(JSON.stringify(card)).toContain('activity-submit-session.json');
+    expect(JSON.stringify(card)).toContain('activity_price_callback_cancel');
+    expect(JSON.stringify(card)).not.toContain('"tag":"action"');
   });
 
   it('parses date picker objects and falls back to default discounts when unchanged', () => {

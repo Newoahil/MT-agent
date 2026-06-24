@@ -233,12 +233,14 @@ export function buildActivityPriceCallbackConfirmCard(request: ActivityPriceCall
       elements: [
         { tag: 'markdown', content },
         {
-          tag: 'action',
-          actions: [
+          tag: 'form',
+          name: 'activity_price_callback_confirm_form',
+          elements: [
             {
               tag: 'button',
               text: { tag: 'plain_text', content: '确认回调' },
               type: 'primary',
+              form_action_type: 'submit',
               name: 'activity_price_callback_confirm_submit',
               behaviors: [{ type: 'callback', value: { action: 'activity_price_callback_confirm', request } }],
             },
@@ -246,6 +248,7 @@ export function buildActivityPriceCallbackConfirmCard(request: ActivityPriceCall
               tag: 'button',
               text: { tag: 'plain_text', content: '取消' },
               type: 'default',
+              form_action_type: 'submit',
               name: 'activity_price_callback_cancel_submit',
               behaviors: [{ type: 'callback', value: { action: 'activity_price_callback_cancel', request } }],
             },
