@@ -735,6 +735,15 @@ describe('handleBotIntent', () => {
     expect(response.text).not.toContain('端内ID 841');
   });
 
+  it('answers comma separated product id queries from report context', async () => {
+    const outputDir = await writeContext();
+    const response = await handleBotIntent({ type: 'query_product', keyword: '565, 701, 733' }, outputDir);
+    expect(response.text).toContain('端内ID 565 iPhone 15');
+    expect(response.text).toContain('端内ID 701 大疆 Pocket 3');
+    expect(response.text).toContain('端内ID 733 大疆DJI Pocket3云台相机128G');
+    expect(response.text).not.toContain('没有找到匹配商品');
+  });
+
   it('returns an operations learning question card', async () => {
     const outputDir = await writeContext();
     const response = await handleBotIntent({ type: 'operations_learning_quiz' }, outputDir);
