@@ -34,6 +34,8 @@ export function createAgentPlannerProvider(provider: LlmProvider): AgentPlannerP
               'Never invent tool/workflow names or arguments.',
               'For atomic actions, return only a bare JSON object with goal, selectedTool, arguments, confidence, reason, and optional requiresConfirmation.',
               'For composite flows, return selectedWorkflow instead of selectedTool; local deterministic code will build the plan and execute only after confirmation.',
+              'For multi-step goals that can be completed by several registered tools with concrete arguments, return only a bare JSON object with goal, steps, confidence, and reason. Each step must contain toolName, arguments, and reason.',
+              'Use steps only when every step has concrete arguments. If a later step depends on a previous result that you cannot express with concrete arguments, ask for clarification or use a registered workflow.',
               'If the goal, tool, workflow, or required arguments are unclear, return only a bare JSON object with goal, needsClarification:true, originalMessage, question, options, confidence, and reason.',
               'Clarification options must be natural-language restatements that can be planned again, each with label, message, and optional description; provide 2 to 4 options.',
               'When learningHints are present and relevant, prefer the historically selected restatement, but still validate required arguments and never skip confirmation for write or high-risk actions.',

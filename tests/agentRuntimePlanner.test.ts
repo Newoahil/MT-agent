@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateAgentPlannerClarificationProposal, validateAgentPlannerProposal } from '../src/agentRuntime/planner.js';
+import { validateAgentMultiStepPlannerProposal, validateAgentPlannerClarificationProposal, validateAgentPlannerProposal } from '../src/agentRuntime/planner.js';
 
 describe('agent runtime planner proposal validation', () => {
   it('validates a read-tool proposal and applies allow policy', () => {
@@ -55,6 +55,43 @@ describe('agent runtime planner proposal validation', () => {
         proposal: { toolName: 'publicTraffic.refreshDashboard', input: {}, reason: '用户要求抓取访问页数据' },
       },
     });
+  });
+
+  it('validates multi-step plans and keeps write steps gated by policy', () => {
+    expect(validateAgentMultiStepPlannerProposal(JSON.stringify({
+      goal: '先看日报再推送到群',
+      steps: [
+        { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先读取最新日报概况' },
+        { toolName: 'publicTraffic.pushLatestReportToGroup', arguments: {}, reason: '再推送日报到群' },
+      ],
+      confidence: 0.86,
+      reason: '用户要求先查询再执行推送',
+    }))).toEqual({
+      ok: true,
+      proposal: {
+        goal: '先看日报再推送到群',
+        steps: [
+          { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先读取最新日报概况' },
+          { toolName: 'publicTraffic.pushLatestReportToGroup', arguments: {}, reason: '再推送日报到群' },
+        ],
+        confidence: 0.86,
+        reason: '用户要求先查询再执行推送',
+      },
+      policies: [
+        { decision: 'allow', toolName: 'publicTraffic.latestSummary', risk: 'read' },
+        {
+          decision: 'confirmation_required',
+          toolName: 'publicTraffic.pushLatestReportToGroup',
+          risk: 'write',
+          proposal: { toolName: 'publicTraffic.pushLatestReportToGroup', input: {}, reason: '再推送日报到群' },
+        },
+      ],
+    });
+  });
+
+  it('rejects invalid multi-step plans', () => {
+    expect(validateAgentMultiStepPlannerProposal('{"goal":"bad","steps":[{"toolName":"product.query","arguments":{},"reason":"missing keyword"},{"toolName":"system.help","arguments":{},"reason":"help"}],"confidence":0.7,"reason":"bad"}')).toEqual({ ok: false, reason: 'invalid_arguments' });
+    expect(validateAgentMultiStepPlannerProposal('{"goal":"bad","steps":[{"toolName":"missing.tool","arguments":{},"reason":"bad"},{"toolName":"system.help","arguments":{},"reason":"help"}],"confidence":0.7,"reason":"bad"}')).toEqual({ ok: false, reason: 'unknown_tool' });
   });
 
   it('validates clarification proposals for ambiguous goals', () => {

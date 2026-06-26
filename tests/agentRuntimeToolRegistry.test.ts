@@ -9,11 +9,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 describe('agent runtime tool registry', () => {
   it('lists stable runtime tool metadata names', () => {
     expect(listAgentTools().map((tool) => tool.name)).toEqual([
+      'system.help',
       'publicTraffic.latestSummary',
       'product.query',
       'product.rankBestSameSku',
       'productId.lookup',
+      'productId.lookupCard',
+      'inventory.statusOverview',
+      'inventory.statusQuery',
+      'linkRegistry.overview',
       'operationsLearning.startQuiz',
+      'operationsLearning.summary',
+      'operationsLearning.history',
+      'agentLearning.summary',
+      'activity.differentialPricingCard',
+      'activity.cancelDifferentialPricingCard',
       'publicTraffic.newLinkPool',
       'publicTraffic.taskPool',
       'publicTraffic.problemProducts',
@@ -48,7 +58,7 @@ describe('agent runtime tool registry', () => {
 
     const tools = listAgentTools();
     tools.pop();
-    expect(listAgentTools()).toHaveLength(27);
+    expect(listAgentTools()).toHaveLength(37);
   });
 
   it('returns defensive copies of tool metadata', () => {
@@ -88,8 +98,18 @@ describe('agent runtime tool registry', () => {
   });
 
   it('makes risk and confirmation metadata explicit', () => {
+    expect(findAgentTool('system.help')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('publicTraffic.latestSummary')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('product.rankBestSameSku')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('productId.lookupCard')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('inventory.statusOverview')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('inventory.statusQuery')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('linkRegistry.overview')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('operationsLearning.summary')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('operationsLearning.history')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('agentLearning.summary')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('activity.differentialPricingCard')).toMatchObject({ risk: 'read', requiresConfirmation: false });
+    expect(findAgentTool('activity.cancelDifferentialPricingCard')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('publicTraffic.newLinkPool')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('publicTraffic.taskPool')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('publicTraffic.problemProducts')).toMatchObject({ risk: 'read', requiresConfirmation: false });
@@ -129,6 +149,11 @@ describe('agent runtime tool registry', () => {
       required: ['keyword'],
       additionalProperties: false,
     });
+    expect(findAgentTool('inventory.statusQuery')?.inputSchema).toMatchObject({
+      properties: { query: { type: 'string' } },
+      required: ['query'],
+      additionalProperties: false,
+    });
   });
 
   it('describes dashboard refresh as a parameter-light write tool', () => {
@@ -146,11 +171,21 @@ describe('agent runtime tool registry', () => {
     const plannerToolNames = listAgentPlannerTools().map((tool) => tool.name);
 
     expect(plannerToolNames).toEqual([
+      'system.help',
       'publicTraffic.latestSummary',
       'product.query',
       'product.rankBestSameSku',
       'productId.lookup',
+      'productId.lookupCard',
+      'inventory.statusOverview',
+      'inventory.statusQuery',
+      'linkRegistry.overview',
       'operationsLearning.startQuiz',
+      'operationsLearning.summary',
+      'operationsLearning.history',
+      'agentLearning.summary',
+      'activity.differentialPricingCard',
+      'activity.cancelDifferentialPricingCard',
       'publicTraffic.newLinkPool',
       'publicTraffic.taskPool',
       'publicTraffic.problemProducts',

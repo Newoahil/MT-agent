@@ -1194,6 +1194,76 @@ describe('handleBotIntent', () => {
     expect(response.text).toContain('端内ID 565 iPhone 15');
   });
 
+  it('lets the Agent planner handle help as a registered tool', async () => {
+    const planner: AgentPlannerProvider = {
+      async proposePlan(request) {
+        expect(request.message).toBe('帮助');
+        expect(request.tools.map((tool) => tool.name)).toContain('system.help');
+        return JSON.stringify({
+          goal: '显示帮助',
+          selectedTool: 'system.help',
+          arguments: {},
+          confidence: 0.99,
+          reason: '用户要求查看帮助',
+        });
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '帮助' }, 'output', { agentPlannerProvider: planner });
+
+    expect(response.text).toContain('可用能力概览');
+    expect(response.text).toContain('写操作和高风险动作会先弹确认卡');
+  });
+
+  it('executes safe multi-step planner plans in sequence', async () => {
+    const outputDir = await writeContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan(request) {
+        expect(request.message).toBe('先看今天概况，再查 565');
+        return JSON.stringify({
+          goal: '先看概况再查商品',
+          steps: [
+            { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先读取最新日报概况' },
+            { toolName: 'product.query', arguments: { keyword: '565' }, reason: '再查询端内ID 565 的表现' },
+          ],
+          confidence: 0.91,
+          reason: '用户明确要求按顺序完成两个只读查询',
+        });
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '先看今天概况，再查 565' }, outputDir, { agentPlannerProvider: planner });
+
+    expect(response.text).toContain('Agent 多步骤计划：先看概况再查商品');
+    expect(response.text).toContain('步骤 1/2：publicTraffic.latestSummary');
+    expect(response.text).toContain('步骤 2/2：product.query');
+    expect(response.text).toContain('565');
+    expect(response.card).toBeUndefined();
+  });
+
+  it('stops multi-step planner plans at the first write confirmation', async () => {
+    const outputDir = await writeContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan() {
+        return JSON.stringify({
+          goal: '先看概况再推送日报',
+          steps: [
+            { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先确认最新日报内容' },
+            { toolName: 'publicTraffic.pushLatestReportToGroup', arguments: {}, reason: '再把最新日报推送到群' },
+          ],
+          confidence: 0.9,
+          reason: '用户要求先读后写，写操作必须确认',
+        });
+      },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '先看今天概况，再推送日报到群' }, outputDir, { agentPlannerProvider: planner });
+
+    expect(response.text).toContain('步骤 1/2：publicTraffic.latestSummary');
+    expect(response.text).toContain('步骤 2/2 需要确认：publicTraffic.pushLatestReportToGroup');
+    expect(JSON.stringify(response.card)).toContain('agent_tool_confirm');
+  });
+
   it('lets the Agent planner summarize same-sku rental price snapshots', async () => {
     const outputDir = await writeContext();
     const registryRoot = await mkdtemp(join(tmpdir(), 'mt-agent-x200-price-registry-'));

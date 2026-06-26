@@ -1,7 +1,7 @@
 import { basename, dirname } from 'node:path';
 import { buildAgentToolConfirmCard } from '../agentRuntime/approvalCard.js';
 import { buildAgentClarificationCard } from '../agentRuntime/clarificationCard.js';
-import { listAgentPlannerTools, validateAgentPlannerClarificationProposal, validateAgentPlannerProposal, type AgentPlannerProvider } from '../agentRuntime/planner.js';
+import { listAgentPlannerTools, validateAgentMultiStepPlannerProposal, validateAgentPlannerClarificationProposal, validateAgentPlannerProposal, type AgentPlannerProvider } from '../agentRuntime/planner.js';
 import { validateAgentWorkflowPlannerProposal } from '../agentRuntime/workflowPlanner.js';
 import { listAgentWorkflows } from '../agentRuntime/workflowRegistry.js';
 import { buildAgentLearningPlannerHints, summarizeAgentLearning } from '../agentLearning/store.js';
@@ -44,6 +44,7 @@ import { getSupportedLlmIntentProposals, parseLlmIntentProposal, type LlmIntentP
 import { runReadOnlyToolSelection } from './llmReadOnlyToolAdapter.js';
 import { parseLlmToolSelection, type LlmReadOnlyToolName, type LlmToolSelectionProvider } from './llmProvider.js';
 import { getRegistryBackedLlmTools } from './llmToolSelector.js';
+import { parseExactBotIntent } from './intent.js';
 import {
   buildRentalOperationConfirmCard,
   buildRentalPricePreviewCard,
@@ -284,6 +285,48 @@ async function handleInventoryStatusIntent(
   return { text: formatInventoryStatusMissingText(result) };
 }
 
+const PRE_CONFIRMATION_PLANNING_TOOLS = new Set(['rental.priceChange', 'rental.specRemovePlan']);
+
+async function executeAgentMultiStepPlannerResponse(
+  rawProposal: string,
+  outputDir: string,
+  options: HandleBotIntentOptions,
+): Promise<BotResponse | null> {
+  const parsed = validateAgentMultiStepPlannerProposal(rawProposal);
+  if (!parsed.ok) return null;
+
+  const textParts = [
+    `Agent 多步骤计划：${parsed.proposal.goal}`,
+    `判断原因：${parsed.proposal.reason}`,
+  ];
+
+  for (const [index, step] of parsed.proposal.steps.entries()) {
+    const policy = parsed.policies[index];
+    const request = { toolName: step.toolName, arguments: step.arguments, reason: step.reason || parsed.proposal.reason };
+    if (policy?.decision === 'confirmation_required' && !PRE_CONFIRMATION_PLANNING_TOOLS.has(step.toolName)) {
+      textParts.push('');
+      textParts.push(`步骤 ${index + 1}/${parsed.proposal.steps.length} 需要确认：${step.toolName}`);
+      textParts.push(`原因：${request.reason}`);
+      return {
+        text: textParts.join('\n'),
+        card: buildAgentToolConfirmCard(request),
+      };
+    }
+
+    const response = await executeAgentToolRequest(request, outputDir, {
+      rentalPriceClient: options.rentalPriceClient,
+      closedOrderFetchImpl: options.closedOrderFetchImpl,
+      closedOrderRegistryPaths: options.closedOrderRegistryPaths,
+    });
+    textParts.push('');
+    textParts.push(`步骤 ${index + 1}/${parsed.proposal.steps.length}：${step.toolName}`);
+    textParts.push(response.text);
+    if (response.card) return { text: textParts.join('\n'), card: response.card };
+  }
+
+  return { text: textParts.join('\n') };
+}
+
 async function agentPlannerResponse(
   message: string,
   outputDir: string,
@@ -301,6 +344,8 @@ async function agentPlannerResponse(
   if (!parsed.ok) {
     const workflowParsed = validateAgentWorkflowPlannerProposal(rawProposal);
     if (!workflowParsed.ok) {
+      const multiStepResponse = await executeAgentMultiStepPlannerResponse(rawProposal, outputDir, options);
+      if (multiStepResponse) return multiStepResponse;
       const clarificationParsed = validateAgentPlannerClarificationProposal(rawProposal);
       return clarificationParsed.ok
         ? { text: clarificationParsed.proposal.question, card: buildAgentClarificationCard(clarificationParsed.proposal) }
@@ -506,11 +551,17 @@ export async function handleBotIntent(intent: BotIntent, outputDir = 'output', o
   }
 
   if (intent.type === 'unknown') {
+    const plannedResponse = await agentPlannerResponse(intent.text, outputDir, options);
+    if (plannedResponse) return plannedResponse;
+
     const rollbackResponse = rollbackTaskConfirmResponse(intent.text);
     if (rollbackResponse) return rollbackResponse;
 
-    const plannedResponse = await agentPlannerResponse(intent.text, outputDir, options);
-    if (plannedResponse) return plannedResponse;
+    const exactFallback = parseExactBotIntent(intent.text);
+    if (exactFallback.type !== 'unknown') {
+      return handleBotIntent(exactFallback, outputDir, { ...options, agentPlannerProvider: undefined });
+    }
+
     if (options.agentPlannerProvider && looksLikeNewLinkWriteIntent(intent.text)) {
       return { text: NEW_LINK_WRITE_INTENT_PLAN_FAILED };
     }

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { runPublicTrafficReportCli } from '../cli/publicTrafficReport.js';
 import type { AgentToolConfirmRequest } from '../agentRuntime/approvalCard.js';
 import { loadConfig } from '../config/loadConfig.js';
@@ -9,17 +9,34 @@ import { loadClosedOrderRegistryContext, type ClosedOrderRegistryPathsInput } fr
 import type { AgentIntent, AgentProblemType } from '../agentData/types.js';
 import { createLinkRegistry } from '../linkRegistry/store.js';
 import type { LinkRegistryEntry } from '../linkRegistry/types.js';
+import { summarizeAgentLearning } from '../agentLearning/store.js';
 import { syncClosedOrderFeedbackFromApi } from '../closedOrderFeedback/sync.js';
+import { queryInventoryStatus } from '../inventoryStatus/query.js';
+import { readInventorySameSkuSnapshot } from '../inventoryStatus/store.js';
 import { sendFeishuCard } from '../notify/feishu.js';
+import { summarizeOperationsLearningHistory, summarizeOperationsLearningSession } from '../operationsLearningLoop/session.js';
 import { buildPublicTrafficCard } from '../publicTraffic/buildPublicTrafficCard.js';
 import { buildPublicTrafficFeishuText } from '../publicTraffic/buildPublicTrafficFeishu.js';
 import { runDashboardRefresh } from '../publicTraffic/dashboardRefresh.js';
+import { buildPublicTrafficPaths } from '../publicTraffic/paths.js';
 import type { PublicTrafficDataReportContext, PublicTrafficProductDataRow } from '../publicTraffic/types.js';
 import { startOperationsLearningSession } from '../operationsLearningLoop/session.js';
 import type { BotResponse } from './types.js';
 import type { FeishuSendTo } from './types.js';
+import { buildActivityAutomationCard, buildCancelDifferentialPricingCardResult } from './activityAutomation.js';
 import { buildClosedOrderObservationCard } from './closedOrderObservationCard.js';
+import { PLANNER_HELP_TEXT } from './help.js';
 import { formatIdLookupResult, lookupProductId } from './idLookup.js';
+import { buildIdLookupCard } from './idLookupCard.js';
+import {
+  buildInventoryStatusDetailCard,
+  buildInventoryStatusOverviewCard,
+  formatInventoryStatusAmbiguousText,
+  formatInventoryStatusDetailText,
+  formatInventoryStatusMissingText,
+  formatInventoryStatusOverviewText,
+} from './inventoryStatusCard.js';
+import { buildLinkRegistryOverviewCard, formatLinkRegistryOverviewText } from './linkRegistryOverviewCard.js';
 import {
   buildRentalOperationConfirmCard,
   buildRentalPricePreviewCard,
@@ -103,6 +120,36 @@ function formatRegistryProductRows(productIds: string[], entries: LinkRegistryEn
     const platform = entry.platformProductId ? `平台商品ID ${entry.platformProductId}` : '平台商品ID 未记录';
     return `端内ID ${entry.internalProductId} ${name}\n${platform}，状态 ${formatLinkRegistryStatus(entry.status)}`;
   }).join('\n\n');
+}
+
+async function inventoryStatusToolResponse(
+  outputDir: string,
+  query: string | undefined,
+  options: AgentToolExecutionOptions,
+): Promise<BotResponse> {
+  const latest = await findLatestReportContext(outputDir);
+  if (!latest) return { text: formatInventoryStatusMissingText({ status: 'snapshot_missing' }) };
+
+  const runDate = basename(dirname(latest.path));
+  const snapshotPath = buildPublicTrafficPaths(outputDir, runDate).sameSkuSnapshot;
+  const [snapshot, registryContext] = await Promise.all([
+    readInventorySameSkuSnapshot(snapshotPath),
+    loadClosedOrderRegistryContext(options.closedOrderRegistryPaths),
+  ]);
+  const result = queryInventoryStatus({
+    snapshot,
+    registryStore: createLinkRegistry(registryContext.registry, registryContext.overrideRisks),
+    query: query ?? '',
+  });
+
+  if (result.status === 'overview') {
+    return { text: formatInventoryStatusOverviewText(result), card: buildInventoryStatusOverviewCard(result) };
+  }
+  if (result.status === 'detail') {
+    return { text: formatInventoryStatusDetailText(result), card: buildInventoryStatusDetailCard(result) };
+  }
+  if (result.status === 'ambiguous') return { text: formatInventoryStatusAmbiguousText(result) };
+  return { text: formatInventoryStatusMissingText(result) };
 }
 
 function readProblemType(value: unknown): AgentProblemType {
@@ -591,6 +638,8 @@ export async function executeAgentToolRequest(
   options: AgentToolExecutionOptions = {},
 ): Promise<BotResponse> {
   switch (request.toolName) {
+    case 'system.help':
+      return { text: PLANNER_HELP_TEXT };
     case 'publicTraffic.latestSummary': {
       const date = readOptionalDate(request.arguments.date);
       const report = await findReportContextForTool(outputDir, date);
@@ -622,10 +671,36 @@ export async function executeAgentToolRequest(
       const query = requireString(request.arguments.keyword, 'keyword');
       return { text: report ? formatIdLookupResult(lookupProductId(report.context, query)) : missingReportContextText(date) };
     }
+    case 'productId.lookupCard':
+      return { text: '已打开常驻商品ID互查卡，可保留在会话里反复查询。', card: buildIdLookupCard() };
+    case 'inventory.statusOverview':
+      return inventoryStatusToolResponse(outputDir, undefined, options);
+    case 'inventory.statusQuery':
+      return inventoryStatusToolResponse(outputDir, requireString(request.arguments.query, 'query'), options);
+    case 'linkRegistry.overview': {
+      const registryContext = await loadClosedOrderRegistryContext(options.closedOrderRegistryPaths);
+      const audit = createLinkRegistry(registryContext.registry, registryContext.overrideRisks).audit();
+      return { text: formatLinkRegistryOverviewText(audit), card: buildLinkRegistryOverviewCard(audit) };
+    }
     case 'operationsLearning.startQuiz': {
       const latest = await findLatestReportContext(outputDir);
       return latest ? startOperationsLearningSession(outputDir, latest.context) : { text: '还没有找到公域日报上下文。' };
     }
+    case 'operationsLearning.summary': {
+      const latest = await findLatestReportContext(outputDir);
+      return latest ? { text: await summarizeOperationsLearningSession(outputDir, latest.context.date) } : { text: '还没有找到公域日报上下文。' };
+    }
+    case 'operationsLearning.history':
+      return { text: await summarizeOperationsLearningHistory(outputDir) };
+    case 'agentLearning.summary':
+      return { text: await summarizeAgentLearning(outputDir) };
+    case 'activity.differentialPricingCard':
+      return {
+        text: '差异化定价卡片已打开，请在卡片中填写日期和折扣后确认执行。',
+        card: buildActivityAutomationCard(),
+      };
+    case 'activity.cancelDifferentialPricingCard':
+      return buildCancelDifferentialPricingCardResult(outputDir);
     case 'publicTraffic.newLinkPool':
       return runReadOnlyAgentIntent(outputDir, { type: 'new_product_pool' }, options);
     case 'publicTraffic.taskPool':

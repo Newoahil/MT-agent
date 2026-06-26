@@ -29,6 +29,20 @@ describe('createAgentRuntime', () => {
     expect(handledIntents).toEqual([{ type: 'query_product', keyword: '565' }]);
   });
 
+  it('uses planner-first resolving when an agent planner is configured', async () => {
+    const handledIntents: BotIntent[] = [];
+    const runtime = createAgentRuntime({
+      agentPlannerProvider: { async proposePlan() { return '{}'; } },
+      handleIntent: async (intent) => {
+        handledIntents.push(intent);
+        return { text: intent.type };
+      },
+    });
+
+    await expect(runtime.handle({ source: 'api', text: '查询 565' })).resolves.toEqual({ text: 'unknown' });
+    expect(handledIntents).toEqual([{ type: 'unknown', text: '查询 565' }]);
+  });
+
   it('preserves request metadata without requiring adapter-specific fields', async () => {
     const handleIntent = vi.fn(async (intent: BotIntent) => ({ text: intent.type }));
     const runtime = createAgentRuntime({

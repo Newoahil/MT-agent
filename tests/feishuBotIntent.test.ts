@@ -141,10 +141,10 @@ describe('parseAgentFirstBotIntent', () => {
     expect(parseAgentFirstBotIntent('s23最好的链接是哪条?')).toEqual({ type: 'unknown', text: 's23最好的链接是哪条?' });
   });
 
-  it('keeps local UI and management intents deterministic', () => {
-    expect(parseAgentFirstBotIntent('帮助')).toEqual({ type: 'help' });
-    expect(parseAgentFirstBotIntent('商品ID互查')).toEqual({ type: 'lookup_product_id_card' });
-    expect(parseAgentFirstBotIntent('库存情况')).toEqual({ type: 'inventory_status_overview' });
-    expect(parseAgentFirstBotIntent('Agent学习汇总')).toEqual({ type: 'agent_learning_summary' });
+  it('keeps local UI and management commands planner-first too', () => {
+    expect(parseAgentFirstBotIntent('帮助')).toEqual({ type: 'unknown', text: '帮助' });
+    expect(parseAgentFirstBotIntent('商品ID互查')).toEqual({ type: 'unknown', text: '商品ID互查' });
+    expect(parseAgentFirstBotIntent('库存情况')).toEqual({ type: 'unknown', text: '库存情况' });
+    expect(parseAgentFirstBotIntent('Agent学习汇总')).toEqual({ type: 'unknown', text: 'Agent学习汇总' });
   });
 });

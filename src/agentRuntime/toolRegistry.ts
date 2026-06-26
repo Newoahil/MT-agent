@@ -4,6 +4,7 @@ const noArgumentsSchema = { type: 'object', additionalProperties: false };
 const optionalReportDateArgumentsSchema = { type: 'object', properties: { date: { type: 'string' } }, additionalProperties: false };
 const keywordArgumentsSchema = { type: 'object', properties: { keyword: { type: 'string' }, date: { type: 'string' } }, required: ['keyword'], additionalProperties: false };
 const productRankingArgumentsSchema = { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false };
+const inventoryStatusQueryArgumentsSchema = { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false };
 const problemProductsArgumentsSchema = {
   type: 'object',
   properties: {
@@ -105,6 +106,13 @@ const rentalOperationArgumentsSchema = {
 
 const agentTools: AgentToolDefinition[] = [
   {
+    name: 'system.help',
+    description: '显示飞书机器人帮助信息和当前可用能力说明',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
     name: 'publicTraffic.latestSummary',
     description: '查询最新公域日报概况',
     risk: 'read',
@@ -133,8 +141,71 @@ const agentTools: AgentToolDefinition[] = [
     inputSchema: keywordArgumentsSchema,
   },
   {
+    name: 'productId.lookupCard',
+    description: '打开可反复输入的端内 ID 与平台商品 ID 互查飞书卡片',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'inventory.statusOverview',
+    description: '查询库存情况总览卡片，按链接档案和库存快照展示同款组库存状态',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'inventory.statusQuery',
+    description: '按商品名、别名、端内 ID 或同款组查询库存情况明细卡片',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: inventoryStatusQueryArgumentsSchema,
+  },
+  {
+    name: 'linkRegistry.overview',
+    description: '查询链接档案概览与治理审计卡片',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
     name: 'operationsLearning.startQuiz',
     description: '开始运营学习测验',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'operationsLearning.summary',
+    description: '查看当前日报对应的运营学习测验反馈汇总',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'operationsLearning.history',
+    description: '查看运营学习测验历史统计',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'agentLearning.summary',
+    description: '查看 Agent 澄清、确认、取消与执行结果学习记录汇总',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'activity.differentialPricingCard',
+    description: '打开差异化定价活动自动化配置卡片',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: noArgumentsSchema,
+  },
+  {
+    name: 'activity.cancelDifferentialPricingCard',
+    description: '打开差异化定价取消与价格回调辅助卡片',
     risk: 'read',
     requiresConfirmation: false,
     inputSchema: noArgumentsSchema,

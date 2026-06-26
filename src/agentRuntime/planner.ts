@@ -27,8 +27,25 @@ export interface AgentPlannerProposal {
   requiresConfirmation?: boolean;
 }
 
+export interface AgentPlannerStep {
+  toolName: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+}
+
+export interface AgentMultiStepPlannerProposal {
+  goal: string;
+  steps: AgentPlannerStep[];
+  confidence: number;
+  reason: string;
+}
+
 export type AgentPlannerValidationResult =
   | { ok: true; proposal: AgentPlannerProposal; policy: AgentPolicyDecision }
+  | { ok: false; reason: 'invalid_json' | 'invalid_shape' | 'unknown_tool' | 'invalid_arguments' };
+
+export type AgentMultiStepPlannerValidationResult =
+  | { ok: true; proposal: AgentMultiStepPlannerProposal; policies: AgentPolicyDecision[] }
   | { ok: false; reason: 'invalid_json' | 'invalid_shape' | 'unknown_tool' | 'invalid_arguments' };
 
 export interface AgentPlannerClarificationProposal extends AgentClarificationRequest {
@@ -132,6 +149,52 @@ export function validateAgentPlannerProposal(raw: string): AgentPlannerValidatio
     ok: true,
     proposal,
     policy: decideAgentPolicy({ tool, input: proposalArguments, reason }),
+  };
+}
+
+export function validateAgentMultiStepPlannerProposal(raw: string): AgentMultiStepPlannerValidationResult {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, reason: 'invalid_json' };
+  }
+
+  if (!isRecord(parsed)) return { ok: false, reason: 'invalid_shape' };
+  const { goal, steps, confidence, reason } = parsed;
+  if (
+    typeof goal !== 'string' ||
+    !Array.isArray(steps) ||
+    steps.length < 2 ||
+    steps.length > 8 ||
+    typeof confidence !== 'number' ||
+    confidence < 0 ||
+    confidence > 1 ||
+    typeof reason !== 'string'
+  ) {
+    return { ok: false, reason: 'invalid_shape' };
+  }
+
+  const normalizedSteps: AgentPlannerStep[] = [];
+  const policies: AgentPolicyDecision[] = [];
+  for (const step of steps) {
+    if (!isRecord(step)) return { ok: false, reason: 'invalid_shape' };
+    const { toolName, arguments: stepArguments, reason: stepReason } = step;
+    if (typeof toolName !== 'string' || !isRecord(stepArguments) || typeof stepReason !== 'string') {
+      return { ok: false, reason: 'invalid_shape' };
+    }
+    const tool = findAgentTool(toolName);
+    if (!tool) return { ok: false, reason: 'unknown_tool' };
+    if (!schemaAllowsArguments(tool.inputSchema, stepArguments)) return { ok: false, reason: 'invalid_arguments' };
+    normalizedSteps.push({ toolName, arguments: stepArguments, reason: stepReason });
+    policies.push(decideAgentPolicy({ tool, input: stepArguments, reason: stepReason || reason }));
+  }
+
+  return {
+    ok: true,
+    proposal: { goal, steps: normalizedSteps, confidence, reason },
+    policies,
   };
 }
 
