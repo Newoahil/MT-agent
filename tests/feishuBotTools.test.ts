@@ -2,11 +2,13 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseAgentToolConfirmRequest } from '../src/agentRuntime/approvalCard.js';
 import type { AgentPlannerProvider } from '../src/agentRuntime/planner.js';
 import type { LlmIntentProposalProvider } from '../src/feishuBot/llmIntentProposal.js';
 import type { LlmToolSelectionProvider } from '../src/feishuBot/llmProvider.js';
 import type { RentalPriceSkillClient } from '../src/feishuBot/rentalPrice.js';
 import { recordAgentLearningEvent } from '../src/agentLearning/store.js';
+import { executeAgentToolRequestWithContinuation } from '../src/feishuBot/agentToolContinuation.js';
 import { executeAgentToolRequest } from '../src/feishuBot/agentToolExecutor.js';
 import { handleBotIntent } from '../src/feishuBot/tools.js';
 
@@ -37,6 +39,16 @@ const metric = {
   hasExposureData: true,
   hasDashboardData: true,
 };
+
+function readAgentToolConfirmRequestFromCard(card: unknown) {
+  const body = (card as { body?: { elements?: Array<{ elements?: Array<{ name?: string; behaviors?: Array<{ value?: unknown }> }> }> } }).body;
+  const form = body?.elements?.find((element) => Array.isArray(element.elements));
+  const button = form?.elements?.find((element) => element.name === 'agent_tool_confirm_submit');
+  const value = button?.behaviors?.[0]?.value;
+  const request = parseAgentToolConfirmRequest(value);
+  if (!request) throw new Error('agent tool confirmation request not found');
+  return request;
+}
 
 async function writeContext(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'mt-agent-bot-tools-'));
@@ -1290,6 +1302,151 @@ describe('handleBotIntent', () => {
     expect(response.text).toContain('步骤 1/2：publicTraffic.latestSummary');
     expect(response.text).toContain('步骤 2/2 需要确认：publicTraffic.pushLatestReportToGroup');
     expect(JSON.stringify(response.card)).toContain('agent_tool_confirm');
+  });
+
+  it('continues a multi-step planner plan after a confirmed write step', async () => {
+    const outputDir = await writeContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan() {
+        return JSON.stringify({
+          goal: '先读概况再复制商品最后查询',
+          steps: [
+            { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先读取最新日报概况' },
+            { toolName: 'rental.copy', arguments: { productId: '761' }, reason: '复制商品 761，必须确认' },
+            { toolName: 'product.query', arguments: { keyword: '565' }, reason: '复制后查询 565 的表现' },
+          ],
+          confidence: 0.91,
+          reason: '用户要求先读后写再查，写操作必须确认后才能继续',
+        });
+      },
+    };
+    const copyCalls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run'); },
+      async execute() { throw new Error('execute should not run'); },
+      async copy(productId) {
+        copyCalls.push(productId);
+        return { productId, ok: true, newProductId: '901', lines: ['copy: ok'] };
+      },
+      async delist() { throw new Error('delist should not run'); },
+      async tenancySet() { throw new Error('tenancySet should not run'); },
+      async specDiscover() { throw new Error('specDiscover should not run'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run'); },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '先看概况，再复制 761，最后查 565' }, outputDir, {
+      agentPlannerProvider: planner,
+      rentalPriceClient,
+    });
+    const request = readAgentToolConfirmRequestFromCard(response.card);
+
+    expect(copyCalls).toEqual([]);
+    expect(request.toolName).toBe('rental.copy');
+    expect(request.continuation?.steps).toHaveLength(1);
+
+    const executed = await executeAgentToolRequestWithContinuation(request, outputDir, { rentalPriceClient });
+
+    expect(copyCalls).toEqual(['761']);
+    expect(executed.text).toContain('Agent 多步骤计划继续执行：先读概况再复制商品最后查询');
+    expect(executed.text).toContain('步骤 2/3：rental.copy');
+    expect(executed.text).toContain('复制成功：商品 761 → 新商品 901');
+    expect(executed.text).toContain('步骤 3/3：product.query');
+    expect(executed.text).toContain('端内ID 565');
+    expect(executed.card).toBeUndefined();
+  });
+
+  it('asks for a second confirmation when a confirmed write is followed by another write step', async () => {
+    const outputDir = await writeContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan() {
+        return JSON.stringify({
+          goal: '连续两个高风险商品动作',
+          steps: [
+            { toolName: 'publicTraffic.latestSummary', arguments: {}, reason: '先确认上下文' },
+            { toolName: 'rental.copy', arguments: { productId: '761' }, reason: '先复制 761' },
+            { toolName: 'rental.delist', arguments: { productId: '762' }, reason: '再下架 762，仍然必须确认' },
+          ],
+          confidence: 0.88,
+          reason: '连续写操作不能一次确认全部执行',
+        });
+      },
+    };
+    const calls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run'); },
+      async execute() { throw new Error('execute should not run'); },
+      async copy(productId) {
+        calls.push(`copy:${productId}`);
+        return { productId, ok: true, newProductId: '902', lines: ['copy: ok'] };
+      },
+      async delist(productId) {
+        calls.push(`delist:${productId}`);
+        return { productId, ok: true, lines: ['delist: ok'] };
+      },
+      async tenancySet() { throw new Error('tenancySet should not run'); },
+      async specDiscover() { throw new Error('specDiscover should not run'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run'); },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '先复制 761，再下架 762' }, outputDir, {
+      agentPlannerProvider: planner,
+      rentalPriceClient,
+    });
+    const firstRequest = readAgentToolConfirmRequestFromCard(response.card);
+    const continued = await executeAgentToolRequestWithContinuation(firstRequest, outputDir, { rentalPriceClient });
+    const secondRequest = readAgentToolConfirmRequestFromCard(continued.card);
+
+    expect(calls).toEqual(['copy:761']);
+    expect(continued.text).toContain('步骤 3/3 需要确认：rental.delist');
+    expect(JSON.stringify(continued.card)).toContain('agent_tool_confirm');
+    expect(secondRequest.toolName).toBe('rental.delist');
+    expect(secondRequest.arguments).toEqual({ productId: '762' });
+  });
+
+  it('continues into a dedicated new-link planning card without copying new links before its own confirmation', async () => {
+    const { outputDir, registryPaths } = await writeNewLinkWorkflowContext();
+    const planner: AgentPlannerProvider = {
+      async proposePlan() {
+        return JSON.stringify({
+          goal: '先复制一个商品再给 SQ1 铺新链',
+          steps: [
+            { toolName: 'rental.copy', arguments: { productId: '761' }, reason: '先复制商品 761' },
+            { toolName: 'rental.newLinkBatchPlan', arguments: { keyword: 'SQ1', count: 5, sourceProductId: '388' }, reason: '再生成 SQ1 新链确认卡' },
+          ],
+          confidence: 0.9,
+          reason: '第二步是新链计划工具，只能生成专用确认卡',
+        });
+      },
+    };
+    const copyCalls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run'); },
+      async execute() { throw new Error('execute should not run'); },
+      async copy(productId) {
+        copyCalls.push(productId);
+        return { productId, ok: true, newProductId: '903', lines: ['copy: ok'] };
+      },
+      async delist() { throw new Error('delist should not run'); },
+      async tenancySet() { throw new Error('tenancySet should not run'); },
+      async specDiscover() { throw new Error('specDiscover should not run'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run'); },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: '先复制 761，再按 SQ1 铺 5 条新链' }, outputDir, {
+      agentPlannerProvider: planner,
+      rentalPriceClient,
+      closedOrderRegistryPaths: registryPaths,
+    });
+    const request = readAgentToolConfirmRequestFromCard(response.card);
+    const continued = await executeAgentToolRequestWithContinuation(request, outputDir, {
+      rentalPriceClient,
+      closedOrderRegistryPaths: registryPaths,
+    });
+
+    expect(copyCalls).toEqual(['761']);
+    expect(continued.text).toContain('步骤 2/2：rental.newLinkBatchPlan');
+    expect(JSON.stringify(continued.card)).toContain('new_link_batch_confirm');
+    expect(JSON.stringify(continued.card)).toContain('"sourceProductId":"388"');
   });
 
   it('passes best-link metadata into a later new-link planning step', async () => {

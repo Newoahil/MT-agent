@@ -11,7 +11,7 @@ import { handleLinkRegistryMaintenanceCardAction } from '../linkRegistry/mainten
 import { handleOperationsLearningFeedback, handleOperationsLearningStop } from '../operationsLearningLoop/session.js';
 import { findLatestReportContext } from './reportStore.js';
 import { createFeishuMessageDispatcher } from './dispatcher.js';
-import { executeAgentToolRequest } from './agentToolExecutor.js';
+import { executeAgentToolRequestWithContinuation } from './agentToolContinuation.js';
 import { buildIdLookupCard } from './idLookupCard.js';
 import { lookupProductId } from './idLookup.js';
 import {
@@ -215,7 +215,8 @@ function fallbackCancelValue(expectedAction: string, candidates: Record<string, 
   }
   if (expectedAction === 'agent_tool_cancel') {
     const toolName = readString(first?.toolName) ?? readString(request?.toolName);
-    return { action: expectedAction, ...(toolName ? { toolName } : {}) };
+    const confirmationKey = readString(first?.confirmationKey) ?? readString(request?.confirmationKey);
+    return { action: expectedAction, ...(toolName ? { toolName } : {}), ...(confirmationKey ? { confirmationKey } : {}) };
   }
   return undefined;
 }
@@ -290,7 +291,9 @@ function actionClaimFamily(actionName: string): string {
 }
 
 function stableActionKey(messageId: string, actionName: string, value: Record<string, unknown>): string {
-  return createHash('sha256').update(JSON.stringify({ messageId, family: actionClaimFamily(actionName) })).digest('hex');
+  const family = actionClaimFamily(actionName);
+  const confirmationKey = family === 'agent_tool' ? readString(value.confirmationKey) : undefined;
+  return createHash('sha256').update(JSON.stringify({ messageId, family: confirmationKey ? `${family}:${confirmationKey}` : family })).digest('hex');
 }
 
 function claimRentalAction(messageId: string, actionName: string, value: Record<string, unknown>): { claimed: true; key: string } | { claimed: false; claim: RentalActionClaim } {
@@ -664,7 +667,7 @@ export function createFeishuSdkBot(config: FeishuSdkBotConfig): FeishuSdkBot {
           void (async () => {
             await deliverCard(client, messageId, statusCard('Agent 操作处理中', `工具 ${request.toolName} 已收到确认，正在执行。`, 'blue'), logError);
             try {
-              const response = await executeAgentToolRequest(request, config.outputDir ?? 'output', { rentalPriceClient });
+              const response = await executeAgentToolRequestWithContinuation(request, config.outputDir ?? 'output', { rentalPriceClient });
               setRentalActionStatus(claim.key, 'completed');
               recordLearning({
                 type: 'tool_completed',

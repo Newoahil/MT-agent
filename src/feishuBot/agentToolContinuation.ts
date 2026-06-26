@@ -1,0 +1,133 @@
+import type { AgentToolConfirmRequest } from '../agentRuntime/approvalCard.js';
+import { buildAgentToolConfirmCard } from '../agentRuntime/approvalCard.js';
+import { decideAgentPolicy } from '../agentRuntime/policy.js';
+import { isPreConfirmationPlanningTool } from '../agentRuntime/planningTools.js';
+import type { AgentPlannerStep } from '../agentRuntime/planner.js';
+import { validateAgentToolArguments } from '../agentRuntime/planner.js';
+import type { AgentStepMetadataStore } from '../agentRuntime/stepResolution.js';
+import { rememberStepMetadata, resolvePlannerArguments } from '../agentRuntime/stepResolution.js';
+import { findAgentTool } from '../agentRuntime/toolRegistry.js';
+import { executeAgentToolRequest, type AgentToolExecutionOptions } from './agentToolExecutor.js';
+import type { BotResponse } from './types.js';
+
+interface ContinuePlannerStepsInput {
+  goal: string;
+  reason: string;
+  steps: AgentPlannerStep[];
+  baseIndex: number;
+  totalSteps: number;
+  metadataStore: AgentStepMetadataStore;
+  textParts: string[];
+  outputDir: string;
+  options: AgentToolExecutionOptions;
+}
+
+function cloneMetadataStore(store: AgentStepMetadataStore): AgentStepMetadataStore {
+  return JSON.parse(JSON.stringify(store)) as AgentStepMetadataStore;
+}
+
+function stepIdFor(step: AgentPlannerStep, absoluteIndex: number): string {
+  return step.id ?? `step${absoluteIndex + 1}`;
+}
+
+export async function continueAgentPlannerSteps(input: ContinuePlannerStepsInput): Promise<BotResponse | null> {
+  for (const [localIndex, step] of input.steps.entries()) {
+    const absoluteIndex = input.baseIndex + localIndex;
+    const stepId = stepIdFor(step, absoluteIndex);
+    const resolvedArguments = resolvePlannerArguments(step.arguments, input.metadataStore);
+    if (!resolvedArguments.ok) {
+      input.textParts.push('');
+      input.textParts.push(`步骤 ${absoluteIndex + 1}/${input.totalSteps} 引用解析失败：${resolvedArguments.reference}`);
+      input.textParts.push('已停止执行后续步骤，未触发任何未确认的写操作。');
+      return { text: input.textParts.join('\n') };
+    }
+    if (!validateAgentToolArguments(step.toolName, resolvedArguments.value)) {
+      input.textParts.push('');
+      input.textParts.push(`步骤 ${absoluteIndex + 1}/${input.totalSteps} 参数校验失败：${step.toolName}`);
+      input.textParts.push('已停止执行后续步骤，未触发任何未确认的写操作。');
+      return { text: input.textParts.join('\n') };
+    }
+
+    const tool = findAgentTool(step.toolName);
+    if (!tool) return null;
+
+    const request: AgentToolConfirmRequest = {
+      toolName: step.toolName,
+      arguments: resolvedArguments.value,
+      reason: step.reason || input.reason,
+    };
+    const policy = decideAgentPolicy({ tool, input: resolvedArguments.value, reason: request.reason });
+    if (policy?.decision === 'confirmation_required' && !isPreConfirmationPlanningTool(step.toolName)) {
+      const remainingSteps = input.steps.slice(localIndex + 1);
+      request.continuation = {
+        goal: input.goal,
+        reason: input.reason,
+        steps: remainingSteps,
+        nextIndex: absoluteIndex + 1,
+        totalSteps: input.totalSteps,
+        currentStepId: stepId,
+        currentStepIndex: absoluteIndex,
+        metadataStore: cloneMetadataStore(input.metadataStore),
+      };
+      input.textParts.push('');
+      input.textParts.push(`步骤 ${absoluteIndex + 1}/${input.totalSteps} 需要确认：${step.toolName}`);
+      input.textParts.push(`原因：${request.reason}`);
+      return {
+        text: input.textParts.join('\n'),
+        card: buildAgentToolConfirmCard(request),
+      };
+    }
+
+    const response = await executeAgentToolRequest(request, input.outputDir, input.options);
+    input.textParts.push('');
+    input.textParts.push(`步骤 ${absoluteIndex + 1}/${input.totalSteps}：${step.toolName}`);
+    input.textParts.push(response.text);
+    rememberStepMetadata(input.metadataStore, stepId, response);
+    if (response.card) return { text: input.textParts.join('\n'), card: response.card };
+  }
+
+  return { text: input.textParts.join('\n') };
+}
+
+export async function executeAgentToolRequestWithContinuation(
+  request: AgentToolConfirmRequest,
+  outputDir = 'output',
+  options: AgentToolExecutionOptions = {},
+): Promise<BotResponse> {
+  const response = await executeAgentToolRequest(
+    { toolName: request.toolName, arguments: request.arguments, reason: request.reason },
+    outputDir,
+    options,
+  );
+  const continuation = request.continuation;
+  if (!continuation) return response;
+
+  const metadataStore = cloneMetadataStore(continuation.metadataStore);
+  const textParts = [
+    `Agent 多步骤计划继续执行：${continuation.goal}`,
+    `判断原因：${continuation.reason}`,
+    '',
+    `步骤 ${continuation.currentStepIndex + 1}/${continuation.totalSteps}：${request.toolName}`,
+    response.text,
+  ];
+  rememberStepMetadata(metadataStore, continuation.currentStepId, response);
+
+  if (response.card) {
+    textParts.push('');
+    textParts.push('当前步骤返回了卡片，后续步骤已暂停，避免覆盖卡片结果。');
+    return { text: textParts.join('\n'), card: response.card };
+  }
+
+  const continued = await continueAgentPlannerSteps({
+    goal: continuation.goal,
+    reason: continuation.reason,
+    steps: continuation.steps,
+    baseIndex: continuation.nextIndex,
+    totalSteps: continuation.totalSteps,
+    metadataStore,
+    textParts,
+    outputDir,
+    options,
+  });
+  return continued ?? { text: textParts.join('\n') };
+}

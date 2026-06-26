@@ -86,6 +86,57 @@ describe('agent runtime approval card', () => {
     })).toBeNull();
   });
 
+  it('parses continuation payloads for confirmed multi-step plans', () => {
+    expect(parseAgentToolConfirmRequest({
+      request: {
+        toolName: 'rental.copy',
+        arguments: { productId: '761' },
+        reason: '复制商品需要确认',
+        continuation: {
+          goal: '先复制再查询',
+          reason: '用户要求复合操作',
+          steps: [
+            { id: 'query', toolName: 'product.query', arguments: { keyword: '${copy.newProductId}' }, reason: '继续查询新商品' },
+          ],
+          nextIndex: 2,
+          totalSteps: 3,
+          currentStepId: 'copy',
+          currentStepIndex: 1,
+          metadataStore: { summary: { text: 'ok' } },
+        },
+      },
+    })).toMatchObject({
+      toolName: 'rental.copy',
+      continuation: {
+        goal: '先复制再查询',
+        nextIndex: 2,
+        totalSteps: 3,
+        currentStepId: 'copy',
+        steps: [{ id: 'query', toolName: 'product.query', arguments: { keyword: '${copy.newProductId}' } }],
+      },
+    });
+
+    expect(parseAgentToolConfirmRequest({
+      request: {
+        toolName: 'rental.copy',
+        arguments: { productId: '761' },
+        reason: 'bad continuation',
+        continuation: {
+          goal: 'bad',
+          reason: 'bad',
+          steps: [
+            { toolName: 'danger.deleteEverything', arguments: {}, reason: 'bad' },
+          ],
+          nextIndex: 2,
+          totalSteps: 3,
+          currentStepId: 'copy',
+          currentStepIndex: 1,
+          metadataStore: {},
+        },
+      },
+    })).toBeNull();
+  });
+
   it('builds and parses a clarification card without executable tool payloads', () => {
     const card = buildAgentClarificationCard({
       originalMessage: '帮我处理一下 pocket3',

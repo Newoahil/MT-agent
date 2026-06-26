@@ -2,8 +2,10 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildAgentToolConfirmCard } from '../src/agentRuntime/approvalCard.js';
 import { createFeishuSdkBot } from '../src/feishuBot/sdkClient.js';
 import type { ActivityAutomationSkillClient } from '../src/feishuBot/activityAutomation.js';
+import type { RentalPriceSkillClient } from '../src/feishuBot/rentalPrice.js';
 import { openLinkRegistryGovernancePrompt } from '../src/linkRegistry/governanceSession.js';
 import type { LinkRegistryEntry } from '../src/linkRegistry/types.js';
 import { openLinkRegistryMaintenancePrompt } from '../src/linkRegistry/maintenanceSession.js';
@@ -82,6 +84,21 @@ function fakeActivityCancellationAssistant() {
       };
     },
   };
+}
+
+function agentToolConfirmActionValue(card: unknown): Record<string, unknown> {
+  const body = (card as { body?: { elements?: Array<{ elements?: Array<{ name?: string; behaviors?: Array<{ value?: unknown }> }> }> } }).body;
+  const form = body?.elements?.find((element) => Array.isArray(element.elements));
+  const button = form?.elements?.find((element) => element.name === 'agent_tool_confirm_submit');
+  const value = button?.behaviors?.[0]?.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('agent tool confirm value not found');
+  return value as Record<string, unknown>;
+}
+
+function patchedCard(sentItem: unknown): unknown {
+  const content = (sentItem as { request?: { data?: { content?: unknown } } }).request?.data?.content;
+  if (typeof content !== 'string') throw new Error('patch content not found');
+  return JSON.parse(content);
 }
 
 async function writeActivitySubmitSessionFixture(status: string = 'price_callback_pending'): Promise<string> {
@@ -291,6 +308,89 @@ describe('createFeishuSdkBot card.action.trigger', () => {
     expect(JSON.stringify((first as any).card.data)).toContain('已取消');
     expect(second).toMatchObject({ card: { type: 'raw', data: { schema: '2.0' } } });
     expect(JSON.stringify((second as any).card.data)).toContain('已经取消');
+  });
+
+  it('allows a continued Agent tool confirmation on the same message after the first write completes', async () => {
+    const registered: Record<string, (data: unknown) => Promise<unknown>> = {};
+    const sent: unknown[] = [];
+    const calls: string[] = [];
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async preview() { throw new Error('preview should not run'); },
+      async execute() { throw new Error('execute should not run'); },
+      async copy(productId) {
+        calls.push(`copy:${productId}`);
+        return { productId, ok: true, newProductId: '901', lines: ['copy: ok'] };
+      },
+      async delist(productId) {
+        calls.push(`delist:${productId}`);
+        return { productId, ok: true, lines: ['delist: ok'] };
+      },
+      async tenancySet() { throw new Error('tenancySet should not run'); },
+      async specDiscover() { throw new Error('specDiscover should not run'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run'); },
+    };
+    const bot = createFeishuSdkBot({
+      appId: 'app',
+      appSecret: 'x',
+      outputDir: 'output',
+      rentalPriceClient,
+      sdk: fakeSdk(sent, registered),
+    });
+
+    bot.start();
+    const firstCard = buildAgentToolConfirmCard({
+      toolName: 'rental.copy',
+      arguments: { productId: '761' },
+      reason: '先复制 761',
+      continuation: {
+        goal: '先复制再下架',
+        reason: '连续写操作要逐步确认',
+        steps: [
+          { toolName: 'rental.delist', arguments: { productId: '762' }, reason: '再下架 762' },
+        ],
+        nextIndex: 1,
+        totalSteps: 2,
+        currentStepId: 'copy',
+        currentStepIndex: 0,
+        metadataStore: {},
+      },
+    });
+
+    await registered['card.action.trigger']({
+      event: {
+        context: { open_message_id: 'om-agent-tool-continued' },
+        operator: { open_id: 'ou_agent' },
+        action: {
+          tag: 'button',
+          name: 'agent_tool_confirm_submit',
+          behaviors: [{ type: 'callback', value: agentToolConfirmActionValue(firstCard) }],
+        },
+      },
+    });
+    for (let attempt = 0; attempt < 100 && (calls.length < 1 || sent.length < 2); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(calls).toEqual(['copy:761']);
+    const secondCard = patchedCard(sent[sent.length - 1]);
+    expect(JSON.stringify(secondCard)).toContain('rental.delist');
+
+    await registered['card.action.trigger']({
+      event: {
+        context: { open_message_id: 'om-agent-tool-continued' },
+        operator: { open_id: 'ou_agent' },
+        action: {
+          tag: 'button',
+          name: 'agent_tool_confirm_submit',
+          behaviors: [{ type: 'callback', value: agentToolConfirmActionValue(secondCard) }],
+        },
+      },
+    });
+    for (let attempt = 0; attempt < 100 && calls.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(calls).toEqual(['copy:761', 'delist:762']);
   });
 
   it('patches a price callback confirmation card after differential pricing automation completes', async () => {

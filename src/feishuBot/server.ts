@@ -27,7 +27,7 @@ import {
   parseActivityPriceCallbackConfirmRequest,
   type ActivityAutomationSkillClient,
 } from './activityAutomation.js';
-import { executeAgentToolRequest } from './agentToolExecutor.js';
+import { executeAgentToolRequestWithContinuation } from './agentToolContinuation.js';
 import { executeNewLinkBatchConfirmRequest, executeNewLinkBatchMultiConfirmRequest, parseNewLinkBatchConfirmRequest, parseNewLinkBatchMultiConfirmRequest } from '../newLinkWorkflow/batch.js';
 import { createRentalPriceSkillClient, executeRentalOperationConfirmRequest, parseRentalOperationConfirmRequest, parseRentalPriceConfirmRequest, type RentalPriceSkillClient } from './rentalPrice.js';
 import type { LlmIntentProposalProvider } from './llmIntentProposal.js';
@@ -174,7 +174,8 @@ function fallbackCancelValue(expectedAction: string, candidates: Record<string, 
   }
   if (expectedAction === 'agent_tool_cancel') {
     const toolName = readString(first?.toolName) ?? readString(request?.toolName);
-    return { action: expectedAction, ...(toolName ? { toolName } : {}) };
+    const confirmationKey = readString(first?.confirmationKey) ?? readString(request?.confirmationKey);
+    return { action: expectedAction, ...(toolName ? { toolName } : {}), ...(confirmationKey ? { confirmationKey } : {}) };
   }
   return undefined;
 }
@@ -235,6 +236,11 @@ function statusCard(title: string, content: string, template: 'blue' | 'green' |
 function claimStatusCard(title: string, claim: ServerCardActionClaim): FeishuCardPayload {
   const template = claim.status === 'processing' ? 'blue' : claim.status === 'completed' ? 'green' : claim.status === 'failed' ? 'red' : 'grey';
   return statusCard(title, duplicateServerCardActionText(claim), template);
+}
+
+function agentToolClaimFamily(value: Record<string, unknown> | undefined): string {
+  const confirmationKey = readString(value?.confirmationKey);
+  return confirmationKey ? `agent_tool:${confirmationKey}` : 'agent_tool';
 }
 
 function readActionFormValue(action: FeishuCardAction | undefined, name: string): string | undefined {
@@ -458,7 +464,7 @@ async function handleCardActionTrigger(
       await replyText(replyConfig, 'Agent 操作确认参数无效，请重新发起。');
       return;
     }
-    const claim = claimServerCardAction(messageId, 'agent_tool', actionName);
+    const claim = claimServerCardAction(messageId, agentToolClaimFamily(value), actionName);
     if (!claim.claimed) {
       return claimStatusCard('Agent 操作已处理', claim.claim);
     }
@@ -470,7 +476,7 @@ async function handleCardActionTrigger(
       arguments: request.arguments,
       reason: request.reason,
     });
-    const response = await executeAgentToolRequest(request, config.outputDir ?? 'output', {
+    const response = await executeAgentToolRequestWithContinuation(request, config.outputDir ?? 'output', {
       rentalPriceClient: config.rentalPriceClient,
     });
     setServerCardActionStatus(claim.key, 'completed');
@@ -490,7 +496,7 @@ async function handleCardActionTrigger(
 
   if (actionName === 'agent_tool_cancel') {
     const toolName = readString(value?.toolName) ?? '未知工具';
-    const claim = claimServerCardAction(messageId, 'agent_tool', actionName);
+    const claim = claimServerCardAction(messageId, agentToolClaimFamily(value), actionName);
     if (!claim.claimed) {
       return claimStatusCard('Agent 操作已处理', claim.claim);
     }

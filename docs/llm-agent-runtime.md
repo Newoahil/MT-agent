@@ -4,6 +4,8 @@ This project uses an OpenAI-compatible `/chat/completions` provider for Feishu n
 
 The LLM only selects a registered tool or workflow and extracts arguments. Local code still performs data lookup, approval card generation, and execution. Write or high-risk operations must pass through a Feishu confirmation card before any side effect.
 
+Multi-step plans may pass metadata from earlier steps into later steps with placeholders such as `${rank.bestProductId}`. When a normal write/high-risk step is reached, the Agent confirmation card stores the remaining plan as a continuation. After the user confirms, the bot executes that one write step and then resumes the remaining steps. If another write/high-risk step appears later, it stops again and asks for a fresh confirmation.
+
 ## Required Env
 
 Set either the `MT_AGENT_LLM_*` variables or the fallback `LLM_*` variables:

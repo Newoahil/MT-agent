@@ -1,11 +1,24 @@
+import { createHash } from 'node:crypto';
 import type { FeishuCardPayload } from '../notify/feishuApp.js';
 import { findAgentTool } from './toolRegistry.js';
-import { validateAgentToolArguments } from './planner.js';
+import { schemaAllowsArguments, validateAgentToolArguments, type AgentPlannerStep } from './planner.js';
 
 export interface AgentToolConfirmRequest {
   toolName: string;
   arguments: Record<string, unknown>;
   reason: string;
+  continuation?: AgentToolConfirmContinuation;
+}
+
+export interface AgentToolConfirmContinuation {
+  goal: string;
+  reason: string;
+  steps: AgentPlannerStep[];
+  nextIndex: number;
+  totalSteps: number;
+  currentStepId: string;
+  currentStepIndex: number;
+  metadataStore: Record<string, unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -16,14 +29,82 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function readStepId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(trimmed) ? trimmed : null;
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function parseContinuationStep(value: unknown): AgentPlannerStep | null {
+  if (!isRecord(value)) return null;
+  const toolName = readString(value.toolName);
+  const reason = readString(value.reason);
+  const args = value.arguments;
+  const id = value.id === undefined ? undefined : readStepId(value.id);
+  if (!toolName || !reason || !isRecord(args) || id === null) return null;
+  const tool = findAgentTool(toolName);
+  if (!tool || !schemaAllowsArguments(tool.inputSchema, args, { allowPlaceholders: true })) return null;
+  return { ...(id ? { id } : {}), toolName, arguments: args, reason };
+}
+
+function parseAgentToolConfirmContinuation(value: unknown): AgentToolConfirmContinuation | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const goal = readString(value.goal);
+  const reason = readString(value.reason);
+  const nextIndex = readNonNegativeInteger(value.nextIndex);
+  const totalSteps = readNonNegativeInteger(value.totalSteps);
+  const currentStepId = readStepId(value.currentStepId);
+  const currentStepIndex = readNonNegativeInteger(value.currentStepIndex);
+  const metadataStore = value.metadataStore;
+  if (
+    !goal ||
+    !reason ||
+    nextIndex === null ||
+    totalSteps === null ||
+    !currentStepId ||
+    currentStepIndex === null ||
+    !isRecord(metadataStore) ||
+    !Array.isArray(value.steps) ||
+    totalSteps < 2 ||
+    totalSteps > 8 ||
+    currentStepIndex >= totalSteps ||
+    nextIndex !== currentStepIndex + 1 ||
+    value.steps.length > totalSteps - nextIndex
+  ) {
+    return null;
+  }
+  const steps: AgentPlannerStep[] = [];
+  const stepIds = new Set<string>();
+  for (const step of value.steps) {
+    const parsed = parseContinuationStep(step);
+    if (!parsed) return null;
+    if (parsed.id) {
+      if (stepIds.has(parsed.id)) return null;
+      stepIds.add(parsed.id);
+    }
+    steps.push(parsed);
+  }
+  return { goal, reason, steps, nextIndex, totalSteps, currentStepId, currentStepIndex, metadataStore };
+}
+
 function compactJson(value: Record<string, unknown>): string {
   const text = JSON.stringify(value);
   return text.length > 240 ? `${text.slice(0, 237)}...` : text;
 }
 
+function confirmationKey(request: AgentToolConfirmRequest): string {
+  return createHash('sha256').update(JSON.stringify(request)).digest('hex').slice(0, 24);
+}
+
 export function buildAgentToolConfirmCard(request: AgentToolConfirmRequest): FeishuCardPayload {
   const tool = findAgentTool(request.toolName);
   const title = tool?.description ?? request.toolName;
+  const key = confirmationKey(request);
   return {
     schema: '2.0',
     config: { wide_screen_mode: true },
@@ -50,7 +131,7 @@ export function buildAgentToolConfirmCard(request: AgentToolConfirmRequest): Fei
               type: 'primary',
               form_action_type: 'submit',
               name: 'agent_tool_confirm_submit',
-              behaviors: [{ type: 'callback', value: { action: 'agent_tool_confirm', request } }],
+              behaviors: [{ type: 'callback', value: { action: 'agent_tool_confirm', request, confirmationKey: key } }],
             },
             {
               tag: 'button',
@@ -58,7 +139,7 @@ export function buildAgentToolConfirmCard(request: AgentToolConfirmRequest): Fei
               type: 'default',
               form_action_type: 'submit',
               name: 'agent_tool_cancel_submit',
-              behaviors: [{ type: 'callback', value: { action: 'agent_tool_cancel', toolName: request.toolName } }],
+              behaviors: [{ type: 'callback', value: { action: 'agent_tool_cancel', toolName: request.toolName, confirmationKey: key } }],
             },
           ],
         },
@@ -75,5 +156,7 @@ export function parseAgentToolConfirmRequest(value: unknown): AgentToolConfirmRe
   const args = request.arguments;
   if (!toolName || !reason || !isRecord(args)) return null;
   if (!findAgentTool(toolName) || !validateAgentToolArguments(toolName, args)) return null;
-  return { toolName, arguments: args, reason };
+  const continuation = parseAgentToolConfirmContinuation(request.continuation);
+  if (request.continuation !== undefined && !continuation) return null;
+  return { toolName, arguments: args, reason, ...(continuation ? { continuation } : {}) };
 }
