@@ -177,6 +177,39 @@ async function writeX200RankingRegistryFixtures(rootDir: string, artifactsDir: s
   };
 }
 
+async function writeX200PriceSnapshotRegistryFixtures(rootDir: string): Promise<{
+  productIdMapPath: string;
+  productNameMapPath: string;
+  firstSeenPath: string;
+  lifecyclePath: string;
+  overridesPath: string;
+  artifactsDir: string;
+}> {
+  const configDir = join(rootDir, 'config');
+  const outputDir = join(rootDir, 'output');
+  const stateDir = join(outputDir, 'state');
+  await mkdir(configDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(configDir, 'product-id-map.json'), JSON.stringify({ p362: '362', p363: '363' }), 'utf8');
+  await writeFile(join(configDir, 'product-name-map.json'), JSON.stringify({ '362': 'vivo X200 Ultra 黑色', '363': 'vivo X200 Ultra 蓝色' }), 'utf8');
+  await writeFile(join(configDir, 'link-registry-overrides.json'), JSON.stringify({
+    version: 1,
+    entries: [
+      { internalProductId: '362', productName: 'vivo X200 Ultra 黑色', shortName: 'vivo X200 Ultra', aliases: ['x200u', 'X200U'], sameSkuGroupId: 'vivo-x200-ultra', updatedAt: '2026-06-26' },
+      { internalProductId: '363', productName: 'vivo X200 Ultra 蓝色', shortName: 'vivo X200 Ultra', aliases: ['x200u', 'X200U'], sameSkuGroupId: 'vivo-x200-ultra', updatedAt: '2026-06-26' },
+    ],
+    sameSkuGroupAliasRules: [{ sameSkuGroupId: 'vivo-x200-ultra', aliases: ['x200u', 'X200U'] }],
+  }), 'utf8');
+  return {
+    productIdMapPath: join(configDir, 'product-id-map.json'),
+    productNameMapPath: join(configDir, 'product-name-map.json'),
+    firstSeenPath: join(stateDir, 'goods-first-seen.json'),
+    lifecyclePath: join(stateDir, 'goods-link-lifecycle.json'),
+    overridesPath: join(configDir, 'link-registry-overrides.json'),
+    artifactsDir: outputDir,
+  };
+}
+
 async function writeClosedOrderRegistryFixtures(rootDir: string): Promise<{
   productIdMapPath: string;
   productNameMapPath: string;
@@ -974,6 +1007,70 @@ describe('handleBotIntent', () => {
     const response = await handleBotIntent({ type: 'unknown', text: '帮我看看苹果手机' }, outputDir, { agentPlannerProvider: planner });
 
     expect(response.text).toContain('端内ID 565 iPhone 15');
+  });
+
+  it('lets the Agent planner summarize same-sku rental price snapshots', async () => {
+    const outputDir = await writeContext();
+    const registryRoot = await mkdtemp(join(tmpdir(), 'mt-agent-x200-price-registry-'));
+    const registryPaths = await writeX200PriceSnapshotRegistryFixtures(registryRoot);
+    const planner: AgentPlannerProvider = {
+      async proposePlan(request) {
+        expect(request.message).toBe('x200u的定价情况怎么样');
+        expect(request.tools.map((tool) => tool.name)).toContain('rental.priceSnapshot');
+        expect(request.tools.map((tool) => tool.name)).toContain('rental.priceChange');
+        return JSON.stringify({
+          goal: '查询 x200u 同款组 SKU 定价情况',
+          selectedTool: 'rental.priceSnapshot',
+          arguments: { query: 'x200u' },
+          confidence: 0.92,
+          reason: '用户询问定价情况，是只读价格快照，不是改价',
+        });
+      },
+    };
+    const rentalPriceClient: RentalPriceSkillClient = {
+      async read(productId) {
+        const valuesByProduct: Record<string, Record<string, Record<string, string>>> = {
+          '362': {
+            'sku-64': { rent1day: '10', rent7day: '60' },
+            'sku-128': { rent1day: '14', rent7day: '88' },
+          },
+          '363': {
+            'sku-64': { rent1day: '12', rent7day: '70' },
+            'sku-128': { rent1day: '16', rent7day: '92' },
+          },
+        };
+        return {
+          productId,
+          ok: true,
+          specs: [
+            { specId: 'sku-64', title: '黑色 64G' },
+            { specId: 'sku-128', title: '黑色 128G' },
+          ],
+          values: valuesByProduct[productId] ?? {},
+          lines: ['read: ok', '2 specs'],
+        };
+      },
+      async preview() { throw new Error('preview should not run for price snapshot'); },
+      async execute() { throw new Error('execute should not run for price snapshot'); },
+      async copy() { throw new Error('copy should not run for price snapshot'); },
+      async delist() { throw new Error('delist should not run for price snapshot'); },
+      async tenancySet() { throw new Error('tenancySet should not run for price snapshot'); },
+      async specDiscover() { throw new Error('specDiscover should not run for price snapshot'); },
+      async specAddAndRefresh() { throw new Error('specAddAndRefresh should not run for price snapshot'); },
+    };
+
+    const response = await handleBotIntent({ type: 'unknown', text: 'x200u的定价情况怎么样' }, outputDir, {
+      agentPlannerProvider: planner,
+      rentalPriceClient,
+      closedOrderRegistryPaths: registryPaths,
+    });
+
+    expect(response.text).toContain('定价情况：x200u');
+    expect(response.text).toContain('同款组：vivo-x200-ultra');
+    expect(response.text).toContain('黑色 64G：1天 ¥11');
+    expect(response.text).toContain('7天 ¥65');
+    expect(response.text).toContain('黑色 128G：1天 ¥15');
+    expect(response.text).toContain('读取商品：成功 2/2');
   });
 
   it('passes silent learning hints into the generic agent planner', async () => {

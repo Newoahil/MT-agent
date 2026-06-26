@@ -237,6 +237,13 @@ const agentTools: AgentToolDefinition[] = [
     inputSchema: rentalPriceChangeArgumentsSchema,
   },
   {
+    name: 'rental.priceSnapshot',
+    description: '按端内ID、商品别名或同款组读取租赁后台当前规格价格，并按 SKU 聚合平均租金。适用于“x200u 的定价情况怎么样”。这是只读查询，不用于改价。',
+    risk: 'read',
+    requiresConfirmation: false,
+    inputSchema: productRankingArgumentsSchema,
+  },
+  {
     name: 'rental.priceRollback',
     description: '按改价审计任务或回滚文件回滚租赁商品价格',
     risk: 'high',

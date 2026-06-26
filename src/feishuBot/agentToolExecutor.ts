@@ -27,6 +27,7 @@ import {
   rentalPriceChangeRequestFromToolArguments,
   rentalPriceRollbackRequestFromToolArguments,
   type RentalOperationConfirmRequest,
+  type RentalPriceReadResult,
   type RentalPriceSkillClient,
 } from './rentalPrice.js';
 import { findReadOnlyTool } from './readOnlyToolRegistry.js';
@@ -39,6 +40,22 @@ export interface AgentToolExecutionOptions {
 }
 
 let publicTrafficReportRunning = false;
+
+const RENTAL_PRICE_SNAPSHOT_MAX_PRODUCTS = 20;
+const RENT_FIELD_ORDER: Array<{ field: string; label: string }> = [
+  { field: 'rent1day', label: '1天' },
+  { field: 'rent2day', label: '2天' },
+  { field: 'rent3day', label: '3天' },
+  { field: 'rent4day', label: '4天' },
+  { field: 'rent5day', label: '5天' },
+  { field: 'rent7day', label: '7天' },
+  { field: 'rent10day', label: '10天' },
+  { field: 'rent15day', label: '15天' },
+  { field: 'rent30day', label: '30天' },
+  { field: 'rent60day', label: '60天' },
+  { field: 'rent90day', label: '90天' },
+  { field: 'rent180day', label: '180天' },
+];
 
 function formatPublicTrafficReportRunSuccess(result: Awaited<ReturnType<typeof runPublicTrafficReportCli>>): string {
   return [
@@ -85,6 +102,162 @@ function formatRegistryProductRows(productIds: string[], entries: LinkRegistryEn
 function readProblemType(value: unknown): AgentProblemType {
   if (value === 'low_exposure' || value === 'weak_conversion' || value === 'high_potential' || value === 'new_product_pool' || value === 'recommended_action') return value;
   throw new Error('problemType must be low_exposure, weak_conversion, high_potential, new_product_pool, or recommended_action');
+}
+
+function queryableEntries(entries: LinkRegistryEntry[]): LinkRegistryEntry[] {
+  return entries.filter((entry) => entry.status !== 'removed');
+}
+
+function resolveRentalPriceSnapshotEntries(
+  query: string,
+  registry: ReturnType<typeof createLinkRegistry>,
+): { ok: true; sameSkuGroupId: string | null; entries: LinkRegistryEntry[]; matchText: string } | { ok: false; text: string } {
+  const normalized = query.trim();
+  if (!normalized) return { ok: false, text: '请提供要查询定价情况的商品、端内ID或同款组。' };
+
+  if (/^\d+$/.test(normalized)) {
+    const entry = registry.getByInternalId(normalized);
+    if (!entry) return { ok: false, text: `链接维护档案未找到端内ID ${normalized}，无法查询定价情况。` };
+    const sameSkuGroupId = entry.sameSkuGroupId?.trim() ?? null;
+    const entries = sameSkuGroupId ? queryableEntries(registry.listBySameSkuGroup(sameSkuGroupId, { includeUnknown: true })) : queryableEntries([entry]);
+    return { ok: true, sameSkuGroupId, entries: entries.length ? entries : [entry], matchText: sameSkuGroupId ? `按端内ID ${normalized} 命中同款组 ${sameSkuGroupId}` : `按端内ID ${normalized} 查询单商品` };
+  }
+
+  const directGroupEntries = queryableEntries(registry.listBySameSkuGroup(normalized, { includeUnknown: true }));
+  if (directGroupEntries.length > 0) {
+    return { ok: true, sameSkuGroupId: normalized, entries: directGroupEntries, matchText: `按同款组 ${normalized} 命中` };
+  }
+
+  const alias = registry.resolveAlias(normalized);
+  if (alias.status === 'not_found') return { ok: false, text: `链接维护档案未匹配到“${query}”，无法安全判断要查询哪组定价。` };
+  if (alias.status === 'multiple') {
+    const candidates = alias.candidates
+      .slice(0, 5)
+      .map((candidate, index) => `${index + 1}. ${candidate.sameSkuGroupId ?? '未分组'}（端内ID ${candidate.candidateInternalProductIds.join('、')}）`)
+      .join('\n');
+    return { ok: false, text: `“${query}”匹配到多个同款组，请补充更具体的商品名或端内ID：\n${candidates}` };
+  }
+
+  const sameSkuGroupId = alias.sameSkuGroupId?.trim() ?? null;
+  const entries = sameSkuGroupId ? queryableEntries(registry.listBySameSkuGroup(sameSkuGroupId, { includeUnknown: true })) : queryableEntries(alias.entries);
+  return { ok: true, sameSkuGroupId, entries, matchText: alias.reason };
+}
+
+function parsePrice(value: string | undefined): number | null {
+  if (!value) return null;
+  const normalized = value.replace(/[^\d.-]/g, '');
+  if (!normalized) return null;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function average(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function money(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function normalizeSkuTitle(value: string): string {
+  return value.replace(/\s+/g, ' ').trim() || '未命名SKU';
+}
+
+function formatRentalPriceSnapshot(
+  query: string,
+  resolution: { sameSkuGroupId: string | null; entries: LinkRegistryEntry[]; matchText: string },
+  reads: Array<{ productId: string; result?: RentalPriceReadResult; error?: string }>,
+): string {
+  const bySku = new Map<string, { displayTitle: string; values: Map<string, number[]>; productIds: Set<string> }>();
+  const successReads = reads.filter((item) => item.result?.ok);
+  const failedReads = reads.filter((item) => !item.result?.ok);
+
+  for (const read of successReads) {
+    const result = read.result!;
+    for (const spec of result.specs) {
+      const title = normalizeSkuTitle(spec.title);
+      const aggregate = bySku.get(title) ?? { displayTitle: title, values: new Map<string, number[]>(), productIds: new Set<string>() };
+      const fields = result.values[spec.specId] ?? {};
+      let hasPrice = false;
+      for (const { field } of RENT_FIELD_ORDER) {
+        const price = parsePrice(fields[field]);
+        if (price === null) continue;
+        const values = aggregate.values.get(field) ?? [];
+        values.push(price);
+        aggregate.values.set(field, values);
+        hasPrice = true;
+      }
+      if (hasPrice) aggregate.productIds.add(result.productId);
+      bySku.set(title, aggregate);
+    }
+  }
+
+  const header = [
+    `定价情况：${query}`,
+    resolution.sameSkuGroupId ? `同款组：${resolution.sameSkuGroupId}` : undefined,
+    `匹配依据：${resolution.matchText}`,
+    `读取商品：成功 ${successReads.length}/${resolution.entries.length}（${successReads.map((item) => item.productId).join('、') || '无'}）`,
+  ].filter((line): line is string => Boolean(line));
+
+  if (bySku.size === 0) {
+    return [
+      ...header,
+      '',
+      '已读取商品，但没有拿到可聚合的租金字段。',
+      ...(failedReads.length ? ['', '失败商品：', ...failedReads.map((item) => `- ${item.productId}: ${item.error ?? item.result?.lines.join('；') ?? '读取失败'}`)] : []),
+    ].join('\n');
+  }
+
+  const skuLines = [...bySku.values()]
+    .sort((left, right) => left.displayTitle.localeCompare(right.displayTitle, 'zh-CN'))
+    .slice(0, 20)
+    .map((sku) => {
+      const prices = RENT_FIELD_ORDER
+        .map(({ field, label }) => {
+          const values = sku.values.get(field) ?? [];
+          return values.length ? `${label} ¥${money(average(values))}（样本${values.length}）` : '';
+        })
+        .filter(Boolean)
+        .join('，');
+      return `- ${sku.displayTitle}：${prices || '暂无租金字段'}；覆盖商品 ${sku.productIds.size} 个`;
+    });
+
+  const omittedSkuCount = bySku.size - skuLines.length;
+  return [
+    ...header,
+    '',
+    '按 SKU 聚合平均租金：',
+    ...skuLines,
+    ...(omittedSkuCount > 0 ? [`还有 ${omittedSkuCount} 个 SKU 未展示。`] : []),
+    ...(failedReads.length ? ['', '失败商品：', ...failedReads.map((item) => `- ${item.productId}: ${item.error ?? item.result?.lines.join('；') ?? '读取失败'}`)] : []),
+  ].join('\n');
+}
+
+async function rentalPriceSnapshotResponse(
+  query: string,
+  client: RentalPriceSkillClient,
+  options: AgentToolExecutionOptions,
+): Promise<BotResponse> {
+  if (!client.read) return { text: '当前租赁改价客户端还没有接入只读价格读取能力，无法查询定价情况。' };
+  const registryContext = await loadClosedOrderRegistryContext(options.closedOrderRegistryPaths);
+  const registry = createLinkRegistry(registryContext.registry);
+  const resolution = resolveRentalPriceSnapshotEntries(query, registry);
+  if (!resolution.ok) return { text: resolution.text };
+  if (resolution.entries.length === 0) return { text: `链接维护档案已匹配到“${query}”，但没有可查询的未下架商品。` };
+  if (resolution.entries.length > RENTAL_PRICE_SNAPSHOT_MAX_PRODUCTS) {
+    return { text: `“${query}”命中 ${resolution.entries.length} 个未下架商品，超过单次定价快照上限 ${RENTAL_PRICE_SNAPSHOT_MAX_PRODUCTS} 个。请补充更具体的端内ID或子分组。` };
+  }
+
+  const reads = await Promise.all(resolution.entries.map(async (entry) => {
+    try {
+      const result = await client.read!(entry.internalProductId);
+      return { productId: entry.internalProductId, result };
+    } catch (error) {
+      return { productId: entry.internalProductId, error: error instanceof Error ? error.message : String(error) };
+    }
+  }));
+
+  return { text: formatRentalPriceSnapshot(query, resolution, reads) };
 }
 
 async function runReadOnlyAgentIntent(
@@ -288,6 +461,10 @@ export async function executeAgentToolRequest(
       const client = options.rentalPriceClient ?? createRentalPriceSkillClient();
       const preview = await client.preview(rentalRequest);
       return { text: `请确认商品 ${rentalRequest.productId} 改价`, card: buildRentalPricePreviewCard(preview) };
+    }
+    case 'rental.priceSnapshot': {
+      const query = requireString(request.arguments.query, 'query');
+      return rentalPriceSnapshotResponse(query, options.rentalPriceClient ?? createRentalPriceSkillClient(), options);
     }
     case 'rental.priceRollback': {
       const rollbackRequest = rentalPriceRollbackRequestFromToolArguments(request.arguments);

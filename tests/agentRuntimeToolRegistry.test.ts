@@ -31,6 +31,7 @@ describe('agent runtime tool registry', () => {
       'rental.specDiscover',
       'rental.specAddAndRefresh',
       'rental.priceChange',
+      'rental.priceSnapshot',
       'rental.priceRollback',
       'rental.operationConfirmRequest',
     ]);
@@ -45,7 +46,7 @@ describe('agent runtime tool registry', () => {
 
     const tools = listAgentTools();
     tools.pop();
-    expect(listAgentTools()).toHaveLength(24);
+    expect(listAgentTools()).toHaveLength(25);
   });
 
   it('returns defensive copies of tool metadata', () => {
@@ -104,6 +105,7 @@ describe('agent runtime tool registry', () => {
     expect(findAgentTool('rental.specDiscover')).toMatchObject({ risk: 'high', requiresConfirmation: true });
     expect(findAgentTool('rental.specAddAndRefresh')).toMatchObject({ risk: 'high', requiresConfirmation: true });
     expect(findAgentTool('rental.priceChange')).toMatchObject({ risk: 'high', requiresConfirmation: true });
+    expect(findAgentTool('rental.priceSnapshot')).toMatchObject({ risk: 'read', requiresConfirmation: false });
     expect(findAgentTool('rental.priceRollback')).toMatchObject({ risk: 'high', requiresConfirmation: true });
     expect(findAgentTool('rental.operationConfirmRequest')).toMatchObject({ risk: 'high', requiresConfirmation: true });
   });
@@ -145,6 +147,7 @@ describe('agent runtime tool registry', () => {
       'rental.specDiscover',
       'rental.specAddAndRefresh',
       'rental.priceChange',
+      'rental.priceSnapshot',
       'rental.priceRollback',
     ]);
     expect(plannerToolNames).not.toContain('rental.operationConfirmRequest');
@@ -182,6 +185,13 @@ describe('agent runtime tool registry', () => {
         scope: { type: 'string' },
       },
       required: ['productId'],
+      additionalProperties: false,
+    });
+    expect(findAgentTool('rental.priceSnapshot')?.inputSchema).toMatchObject({
+      properties: {
+        query: { type: 'string' },
+      },
+      required: ['query'],
       additionalProperties: false,
     });
     expect(findAgentTool('rental.priceRollback')?.inputSchema).toMatchObject({
