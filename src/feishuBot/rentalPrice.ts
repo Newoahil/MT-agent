@@ -1542,8 +1542,20 @@ function readEvidencePath(rootDir: string, evidence: unknown, type: string): str
   return undefined;
 }
 
+// Statuses from which a rollback may still be (re-)attempted. 'completed' is the normal
+// case (never rolled back). 'rollback_failed'/'rollback_verify_failed' are included because
+// task.status is shared between the forward execution and the rollback attempt: a partially
+// failed chunked rollback overwrites status away from 'completed' on the same task record,
+// which — if only 'completed' were accepted here — would permanently lock that task out of
+// ever being retried, even though the ORIGINAL execution's verify_result evidence (checked
+// below) is untouched by a failed rollback attempt and still proves it succeeded.
+// 'rolled_back' is deliberately excluded: that task already finished rolling back.
+const RETRYABLE_ROLLBACK_SOURCE_STATUSES = new Set(['completed', 'rollback_failed', 'rollback_verify_failed']);
+
 async function assertAppliedAuditEvidence(rootDir: string, task: Record<string, unknown>, changesFile: string, expectedFieldCount: number): Promise<void> {
-  if (readString(task.status) !== 'completed') throw new Error('回滚审计不完整：原改价任务尚未成功完成，不能执行回滚。');
+  const status = readString(task.status);
+  if (status === 'rolled_back') throw new Error('回滚审计不完整：该改价任务已回滚成功，无需重复回滚。');
+  if (!status || !RETRYABLE_ROLLBACK_SOURCE_STATUSES.has(status)) throw new Error('回滚审计不完整：原改价任务尚未成功完成，不能执行回滚。');
   const verifyResultFile = readEvidencePath(rootDir, task.evidence, VERIFY_RESULT_EVIDENCE_TYPE);
   if (!verifyResultFile || !(await fileExists(verifyResultFile))) throw new Error('回滚审计不完整：缺少原改价验证证据，不能执行回滚。');
   const verifyResult = await readJsonRecord(verifyResultFile);
