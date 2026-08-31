@@ -2236,6 +2236,11 @@ export function createRentalPriceSkillClient(options: RentalPriceSkillClientOpti
             expectedFieldCount: chunkFieldCount,
             applyStatus: chunkApplyStatus,
             submitStatus: chunkSubmitStatus,
+            // Mirrors the single-shot submit-failure branch: without this, a definitive
+            // ('error', not 'unknown') submit failure inside a chunk only ever recorded the
+            // bare status, discarding the daemon's actual message/detail/url — making the
+            // failure undiagnosable from the artifact alone.
+            ...(chunkOk ? {} : { submit: sanitizedDaemonSubmitEvidence(chunkSubmit) }),
             verifyStatus: chunkVerifyStatus,
             changesFile: chunkChangesFile,
             createdAt: new Date().toISOString(),
@@ -2249,7 +2254,8 @@ export function createRentalPriceSkillClient(options: RentalPriceSkillClientOpti
           // instead.
           await updateAuditTask(rootDir, audit, chunkOk ? 'completed' : 'failed', chunkResultFile, chunkOk ? 'chunk_verify_result' : 'execution_result');
 
-          chunkOutcomes.push({ index, ok: chunkOk, specIds, fieldCount: chunkFieldCount, lines: [`apply: ${chunkApplyStatus}`, `submit: ${chunkSubmitStatus}`, `verify: ${chunkVerifyStatus}`] });
+          const chunkSubmitMessage = chunkOk ? undefined : optionalString(chunkSubmit, 'message');
+          chunkOutcomes.push({ index, ok: chunkOk, specIds, fieldCount: chunkFieldCount, lines: [`apply: ${chunkApplyStatus}`, `submit: ${chunkSubmitStatus}`, ...(chunkSubmitMessage ? [`submitMessage: ${chunkSubmitMessage}`] : []), `verify: ${chunkVerifyStatus}`] });
           if (!chunkOk) {
             overallOk = false;
             break;
@@ -2614,6 +2620,10 @@ export function createRentalPriceSkillClient(options: RentalPriceSkillClientOpti
             expectedFieldCount: chunkFieldCount,
             applyStatus: chunkApplyStatus,
             submitStatus: chunkSubmitStatus,
+            // Mirrors the single-shot rollback submit-failure branch: a definitive ('error',
+            // not 'unknown') submit failure inside a rollback chunk previously only recorded
+            // the bare status, discarding the daemon's actual message/detail/url.
+            ...(chunkOk ? {} : { submit: sanitizedDaemonSubmitEvidence(chunkSubmit) }),
             verifyStatus: chunkVerifyStatus,
             rollbackFile: audit.rollbackFile,
             changesFile: chunkFieldsFile,
@@ -2624,7 +2634,8 @@ export function createRentalPriceSkillClient(options: RentalPriceSkillClientOpti
           // so nothing downstream can mistake a partial chunk for the whole rollback's proof.
           await updateAuditTask(rootDir, audit, chunkOk ? 'rolled_back' : 'rollback_failed', chunkResultFile, chunkOk ? 'rollback_chunk_verify_result' : 'rollback_execution_result');
 
-          chunkOutcomes.push({ index, ok: chunkOk, specIds, fieldCount: chunkFieldCount, lines: [`apply: ${chunkApplyStatus}`, `submit: ${chunkSubmitStatus}`, `verify: ${chunkVerifyStatus}`] });
+          const chunkSubmitMessage = chunkOk ? undefined : optionalString(chunkSubmit, 'message');
+          chunkOutcomes.push({ index, ok: chunkOk, specIds, fieldCount: chunkFieldCount, lines: [`apply: ${chunkApplyStatus}`, `submit: ${chunkSubmitStatus}`, ...(chunkSubmitMessage ? [`submitMessage: ${chunkSubmitMessage}`] : []), `verify: ${chunkVerifyStatus}`] });
           if (!chunkOk) {
             overallOk = false;
             break;
